@@ -20,6 +20,8 @@ andersan = "^0.1.4"
 matplotlib = "^3.9.2"
 keras = "^3.5.0"
 tensorflow = "^2.17.0"
+fastapi = "^0.112.2"
+uvicorn = "^0.30.6"
 
 [tool.isort]
 multi_line_output = 3

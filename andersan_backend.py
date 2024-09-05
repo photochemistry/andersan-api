@@ -31,7 +31,6 @@ Neighbors = dict(
 prefecture_ranges = dict(kanagawa=np.array([[138.94, 35.13], [139.84, 35.66]]))
 
 
-
 def station2lonlat(stations: list):
     lonlats = dict()
     for station in stations:
@@ -144,7 +143,6 @@ def observes(
         table[item] = np.array(values)
 
     return table
-
 
 
 OPENMETEO_ITEMS = [

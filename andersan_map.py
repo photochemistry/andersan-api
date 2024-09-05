@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import folium
 import numpy as np
 from andersan_backend import prefecture_ranges
+
+
 def colorize(array, cmap="viridis"):
     # 値を色に変換
     normed_data = (array - np.nanmin(array)) / (np.nanmax(array) - np.nanmin(array))
