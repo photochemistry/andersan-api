@@ -1,0 +1,38 @@
+[tool.poetry]
+name = "andersan-api"
+version = "0.1.0"
+description = ""
+authors = ["vitroid <vitroid@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+jupyter = "^1.1.1"
+numpy = "<2.0"
+pandas = "^2.2.2"
+folium = "^0.17.0"
+airpollutionwatch = "^0.1.5"
+delaunayextrapolation = "^0.2"
+requests-cache = "^1.2.1"
+retry-requests = "^2.0.0"
+sqlitedict = "^2.1.0"
+andersan = "^0.1.4"
+matplotlib = "^3.9.2"
+keras = "^3.5.0"
+tensorflow = "^2.17.0"
+
+[tool.isort]
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+line_length = 88
+profile = "black"
+
+[[tool.poetry.source]]
+name = "nvidia"
+url = "https://pypi.nvidia.com/"
+priority = "supplemental"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
