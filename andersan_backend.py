@@ -4,6 +4,7 @@
 import sys
 
 sys.path.append("../typed-lru-cache")
+sys.path.append("../airpollutionwatch")
 from lru import cache, shelf_cache, sqlitedict_cache
 from airpollutionwatch import kanagawa, shizuoka, tokyo, chiba, yamanashi, amedas
 import pandas as pd
@@ -16,6 +17,8 @@ from logging import getLogger, basicConfig, INFO, DEBUG
 import requests_cache
 from retry_requests import retry
 import datetime
+import json
+from datetime import timedelta
 
 # 県ごとの大気監視ウェブサイトからデータをもってくる関数の名前
 prefecture_retrievers = dict(
@@ -142,6 +145,8 @@ def observes(
 
         table[item] = np.array(values)
 
+    # table.index = table.index.astype(int)
+
     return table
 
 
@@ -219,3 +224,83 @@ def openmeteo_tiles(target_prefecture: str, isodate: str, zoom):
     dt = datetime.datetime.fromisoformat(isodate)
     datestr = dt.strftime("%Y-%m-%d")
     return openmeteo_tiles_(target_prefecture, datestr, zoom)
+
+
+def X_instant(
+    pref_name: str,
+    isodate: str,
+    zoom: int,
+    lookback=24,
+    forecast=8,
+    items=("NMHC", "OX", "NOX", "TEMP", "WX", "WY"),
+    noaa_cols=(
+        "temperature_2m",
+        "cloud_cover",
+        "pressure_msl",
+        "shortwave_radiation",
+        "wind_speed_10m",
+    ),
+):
+    logger = getLogger()
+
+    observes_table = pd.DataFrame()
+    timeorigin = datetime.datetime.fromisoformat(isodate)
+    for delta in range(-23, 1):
+        dt = timeorigin + timedelta(hours=delta)
+        table = observes("kanagawa", dt.isoformat(), zoom)
+        observes_table = pd.concat([observes_table, table], axis=0)
+    # 風向をここで加えておく。
+
+    observes_table
+
+    assert timeorigin.hour < 16, "予測値が翌日にまたがるケースはまだ対応していません。"
+    all_forecast_dataframe = openmeteo_tiles("kanagawa", isodate, zoom)
+    timebegin = timeorigin + timedelta(hours=1)
+    timeend = timeorigin + timedelta(hours=8)
+    tiles = np.unique(all_forecast_dataframe[["X", "Y"]].to_numpy(), axis=0)
+    # print(tiles)
+
+    X0 = np.zeros([len(tiles), 24, 6])
+    X2 = np.zeros([len(tiles), 8, 5])
+    X3 = np.zeros([len(tiles), 8], dtype=int)
+    for j, (tileX, tileY) in enumerate(tiles):
+        for i, item in enumerate(items):
+            X0[j, :, i] = observes_table[
+                (observes_table.X == tileX) & (observes_table.Y == tileY)
+            ][item].to_numpy()
+        # print(X0)
+
+        for i, item in enumerate(noaa_cols):
+            X2[j, :, i] = all_forecast_dataframe[
+                (all_forecast_dataframe.X == tileX)
+                & (all_forecast_dataframe.Y == tileY)
+                & (all_forecast_dataframe.date >= timebegin)
+                & (all_forecast_dataframe.date <= timeend)
+            ][item]
+
+        X3[j, :] = all_forecast_dataframe[
+            (all_forecast_dataframe.X == tileX)
+            & (all_forecast_dataframe.Y == tileY)
+            & (all_forecast_dataframe.date >= timebegin)
+            & (all_forecast_dataframe.date <= timeend)
+        ]["weather_code"]
+
+    X = {
+        "Input_lookbacks": X0,
+        "Input_forecasts": X2,
+        "Input_weathercodes": X3,
+    }
+
+    stdfilename = "../andersan-train/datatype3/standards.json"
+    logger.info(f"Standardization with {stdfilename}")
+
+    with open(stdfilename) as f:
+        specs = json.load(f)
+
+    for label in specs:
+        for icol in range(X[label].shape[-1]):
+            average = specs[label][icol]["average"]
+            std = specs[label][icol]["std"]
+            X[label][:, :, icol] = (X[label][:, :, icol] - average) / std
+
+    return X

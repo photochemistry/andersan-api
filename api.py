@@ -3,7 +3,8 @@ import math
 import os
 from functools import lru_cache
 from logging import getLogger
-from typing import List, Union
+from typing import List, Union, Literal
+from logging import getLogger, basicConfig, INFO, DEBUG
 
 import numpy as np
 
@@ -17,7 +18,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
-from andersan_backend import prefecture_retrievers
+from andersan_backend import prefecture_retrievers, observes
+import json
 
 # class Predict(BaseModel):
 #     loc: int = Field(example=14131030)
@@ -44,25 +46,60 @@ app.add_middleware(
 )
 
 
-@app.get("/raw/{prefecture}/{isodate}")
-async def raw_data(prefecture: str, isodate: str):
+@app.get("/raw/{prefecture}/{datehour}")
+async def raw_data(
+    prefecture: Literal[tuple(prefecture_retrievers)], datehour: datetime.datetime
+):
     """県内の全測定局の実測値を返す。
 
     Args:
-        prefecture (str): 県名
-        isodate (str): 時刻(isoformat)
+    -   prefecture (str): 県名 ["kanagawa"]
+    -   isodate (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"]
 
     Returns:
-        _type_: CSV形式(暫定)
+    -   _str_: 県提供の大気監視データ
     """
     assert prefecture in prefecture_retrievers
     # もうちょっと補助情報も出さないと使えないよ。
-    return Response(
-        content=prefecture_retrievers[prefecture].retrieve(isodate).to_csv()
-    )
+    # APIを叩く側はJSなので、JSONにしておくほうが便利。
+    isodate = datetime.datetime.isoformat(datehour)
+    raw_data = prefecture_retrievers[prefecture].retrieve(isodate, station_set="air")
+
+    dict_data = dict(data=raw_data.to_dict(), spec={})
+    return Response(content=json.dumps(dict_data, indent=2, ensure_ascii=False))
+
+
+@app.get("/tile/{prefecture}/{datehour}/{zoom}")
+async def tile_data(
+    prefecture: Literal[tuple(prefecture_retrievers)],
+    datehour: datetime.datetime,
+    zoom: int,
+):
+    """県内のタイル点での実測値を返す。
+
+    Args:
+    -   prefecture (str): 県名 ["kanagawa"]
+    -   isodate (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"]
+    -   zoom (int): 地理院メッシュのzoom値
+
+    Returns:
+    -   _str_: 8時間先までのOX予測値
+    """
+    assert prefecture in prefecture_retrievers
+    assert False, "データをうまくおさめるのが難しい。"
+    # もうちょっと補助情報も出さないと使えないよ。
+    # APIを叩く側はJSなので、JSONにしておくほうが便利。
+    isodate = datetime.datetime.isoformat(datehour)
+    raw_data = observes(prefecture, isodate, zoom)
+    print(raw_data)
+
+    # dict_data = dict(data=raw_data.to_dict(), spec={})
+    # return Response(content=json.dumps(dict_data, indent=2, ensure_ascii=False))
+    return Response(content=raw_data.to_json(indent=2, force_ascii=False))
 
 
 if __name__ == "__main__":
+    basicConfig(level=DEBUG)
     log_config = uvicorn.config.LOGGING_CONFIG
     log_config["formatters"]["access"][
         "fmt"
@@ -73,6 +110,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "api:app",
         host="0.0.0.0",
-        port=8087,
+        port=8088,
         reload=True,
     )

@@ -11,7 +11,6 @@ jupyter = "^1.1.1"
 numpy = "<2.0"
 pandas = "^2.2.2"
 folium = "^0.17.0"
-airpollutionwatch = "^0.1.5"
 delaunayextrapolation = "^0.2"
 requests-cache = "^1.2.1"
 retry-requests = "^2.0.0"
@@ -22,6 +21,7 @@ keras = "^3.5.0"
 tensorflow = "^2.17.0"
 fastapi = "^0.112.2"
 uvicorn = "^0.30.6"
+lxml = "^5.3.0"
 
 [tool.isort]
 multi_line_output = 3
