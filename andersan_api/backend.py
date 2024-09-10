@@ -1,10 +1,9 @@
 # andersanのデータ取得関数群
 
 # from functools import lru_cache
-import sys
-
-sys.path.append("../typed-lru-cache")
-sys.path.append("../airpollutionwatch")
+# import sys
+# sys.path.append("../typed-lru-cache")
+# sys.path.append("../airpollutionwatch")
 from lru import cache, shelf_cache, sqlitedict_cache
 from airpollutionwatch import kanagawa, shizuoka, tokyo, chiba, yamanashi, amedas
 import pandas as pd
