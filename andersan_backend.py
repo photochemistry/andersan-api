@@ -69,7 +69,8 @@ def observes(
 ):
     """各県の特定時刻の大気監視データを入手し、地理院メッシュ点での測定値を内挿する。"""
 
-    assert target_prefecture in Neighbors  # 神奈川以外はまだ動かない
+    if target_prefecture not in Neighbors:
+        return None # 神奈川以外はまだ動かない
 
     # 地理院メッシュの間隔
     pref_range = np.array(prefecture_ranges[target_prefecture])  # lon,lat
