@@ -1,9 +1,6 @@
-# andersanのデータ取得関数群
+# andersanのデータ取得関数群。APIに必要なもののみ集約する。
+# 1ファイルだけならディレクトリ階層は要らないが、とりあえず残す。
 
-# from functools import lru_cache
-# import sys
-# sys.path.append("../typed-lru-cache")
-# sys.path.append("../airpollutionwatch")
 from lru import cache, shelf_cache, sqlitedict_cache
 from airpollutionwatch import kanagawa, shizuoka, tokyo, chiba, yamanashi, amedas
 import pandas as pd
@@ -18,6 +15,7 @@ from retry_requests import retry
 import datetime
 import json
 from datetime import timedelta
+import keras
 
 # 県ごとの大気監視ウェブサイトからデータをもってくる関数の名前
 prefecture_retrievers = dict(
@@ -59,7 +57,7 @@ def wdws2wxwy(wdws):
 # @lru_cache(maxsize=9999)
 # @shelf_cache("observes")
 @sqlitedict_cache("observes")  # vscodeで中身をチェックできる分、こちらのほうが便利
-def observes(
+def observes_(
     target_prefecture: str,
     isodate: str,
     zoom: int,
@@ -77,10 +75,13 @@ def observes(
 
     # 測定値をとってくる。
     # 2回目からのアクセスはairpollution.sqliteに保存された内容を利用する
-    dfs = [
-        prefecture_retrievers[pref].retrieve(isodate)
-        for pref in Neighbors[target_prefecture]
-    ]
+    try:
+        dfs = [
+            prefecture_retrievers[pref].retrieve(isodate)
+            for pref in Neighbors[target_prefecture]
+        ]
+    except:
+        return None
 
     if use_amedas:
         # 気温はAMeDASから入手 (ゆくゆくは風速も)
@@ -150,6 +151,19 @@ def observes(
     return table
 
 
+def observes(
+    target_prefecture: str,
+    isodate: str,
+    zoom: int,
+    use_amedas=True,
+    items=["NMHC", "OX", "NOX", "TEMP", "WX", "WY"],  # order in datatype3
+):    # ここで、isodateに時刻が含まれる場合に日付と時だけに修正する。
+    dt = datetime.datetime.fromisoformat(isodate)
+    datestr = dt.strftime("%Y-%m-%dT%H:00:00+09:00")
+    return observes_(target_prefecture, datestr, zoom, use_amedas=use_amedas, items=items)
+
+
+
 OPENMETEO_ITEMS = [
     "temperature_2m",
     "weather_code",
@@ -166,7 +180,8 @@ OPENMETEO_ITEMS = [
 def openmeteo_tiles_(target_prefecture: str, datestr: str, zoom):
     logger = getLogger()
 
-    assert target_prefecture in Neighbors  # 神奈川以外はまだ動かない
+    if target_prefecture not in Neighbors:  # 神奈川以外はまだ動かない
+        return None
 
     # 地理院メッシュの間隔
     pref_range = np.array(prefecture_ranges[target_prefecture])  # lon,lat
@@ -240,6 +255,8 @@ def X_instant(
         "shortwave_radiation",
         "wind_speed_10m",
     ),
+    stdfilename = "standards.json"
+
 ):
     logger = getLogger()
 
@@ -249,9 +266,6 @@ def X_instant(
         dt = timeorigin + timedelta(hours=delta)
         table = observes("kanagawa", dt.isoformat(), zoom)
         observes_table = pd.concat([observes_table, table], axis=0)
-    # 風向をここで加えておく。
-
-    observes_table
 
     assert timeorigin.hour < 16, "予測値が翌日にまたがるケースはまだ対応していません。"
     all_forecast_dataframe = openmeteo_tiles("kanagawa", isodate, zoom)
@@ -291,7 +305,6 @@ def X_instant(
         "Input_weathercodes": X3,
     }
 
-    stdfilename = "../andersan-train/datatype3/standards.json"
     logger.info(f"Standardization with {stdfilename}")
 
     with open(stdfilename) as f:
@@ -304,3 +317,24 @@ def X_instant(
             X[label][:, :, icol] = (X[label][:, :, icol] - average) / std
 
     return X
+
+def predict_ox(prefecture, isodate, zoom, basename = "andersan0_1.py"):
+    # タイルと時刻の情報を得る
+    table = observes("kanagawa", isodate, zoom)
+
+    # NNに食わせるデータの生成
+    X = X_instant(prefecture, isodate, zoom)
+
+    # モデルの準備
+    model = keras.models.load_model(f"{basename}.best.keras")
+
+    # 予測
+    pred = model.predict(X)
+
+    # andersan0_1はOX値の二乗を予測するので、ここで平方根をとって戻す。
+    # 二乗を予測するのは、OXが大きい時の精度を高めるため。
+    pred = pred**0.5
+    table = table.drop(columns=["OX", "NOX", "TEMP", "WX", "WY", "NMHC"])
+    for i in range(8):
+        table[f"+{i+1}"] = pred[:,i]
+    return table

@@ -18,7 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
-from andersan_api.backend import prefecture_retrievers, observes, Neighbors
+from andersan_api import backend
 import json
 
 # class Predict(BaseModel):
@@ -46,36 +46,51 @@ app.add_middleware(
 )
 
 
+ITEMS = ["NMHC", "OX", "NOX", "TEMP", "WX", "WY"]
+
+ITEMSPECS = {"NMHC":{"desc": "Non-methane hydrocarbons", "unit": "10ppbC","range":[0,100]},
+             "OX":{"desc": "Oxidants", "unit": "ppb","range":[0,100]},
+             "NOX":{"desc": "Nitrogen oxides", "unit": "ppb","range":[0,100]},
+             "TEMP":{"desc": "Temperature", "unit": "0.1C","range":[0,250]},
+             "WX":{"desc": "X component of the window speed", "unit": "0.1m/s","range":[0,100]},
+             "WY":{"desc": "Y component of the window speed", "unit": "0.1m/s","range":[0,100]},
+             }
+
 @app.get("/raw/{prefecture}/{datehour}")
 async def raw_data(
-    prefecture: Literal[tuple(prefecture_retrievers)], datehour: datetime.datetime
+    prefecture: Literal[tuple(backend.prefecture_retrievers)], datehour: datetime.datetime
 ):
     """県内の全測定局の実測値を返す。
 
     Args:
     -   prefecture (str): 県名 ["kanagawa"]
-    -   isodate (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"]
+    -   isodate (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。
 
     Returns:
     -   _str_: 県提供の大気監視データ
     """
-    if prefecture not in prefecture_retrievers:
+    if prefecture not in backend.prefecture_retrievers:
         raise HTTPException(status_code=404, detail="Out of the cover area")
     # もうちょっと補助情報も出さないと使えないよ。
     # APIを叩く側はJSなので、JSONにしておくほうが便利。
     isodate = datetime.datetime.isoformat(datehour)
-    raw_data = prefecture_retrievers[prefecture].retrieve(isodate, station_set="air")
+    try:
+        raw_data = backend.prefecture_retrievers[prefecture].retrieve(isodate, station_set="air")
+    except:
+        raise HTTPException(status_code=404, detail="Data not available.")
+
 
     dict_data = dict(data=raw_data.to_dict(), spec={})
     return Response(content=json.dumps(dict_data, indent=2, ensure_ascii=False))
 
 
-def dictize(df):
-    spec = dict()
+def dictize(df, items=[]):
+    spec = ITEMSPECS.copy()
     loc = ("X", "Y", "lon", "lat", "Z")
     for col in loc:
         spec[col] = sorted(df[col].unique().tolist())
     spec["timestamp"] = sorted(df.index.unique().map(lambda x: int(x.timestamp())))
+    spec["items"] = items
 
     data = dict()
     data["XY"] = df[["X", "Y"]].to_numpy().tolist()
@@ -89,7 +104,7 @@ def dictize(df):
 
 @app.get("/tile/{prefecture}/{datehour}/{zoom}")
 async def tile_data(
-    prefecture: Literal[tuple(prefecture_retrievers)],
+    prefecture: Literal[tuple(backend.Neighbors)],
     datehour: datetime.datetime,
     zoom: int,
 ):
@@ -97,59 +112,53 @@ async def tile_data(
 
     Args:
     -   prefecture (str): 県名 ["kanagawa"]
-    -   isodate (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"]
+    -   isodate (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。
     -   zoom (int): 地理院メッシュのzoom値
 
     Returns:
     -   _str_: 実測値
     """
-    if prefecture not in Neighbors:
+    if prefecture not in backend.Neighbors:
         raise HTTPException(status_code=404, detail="Out of the cover area")
     # もうちょっと補助情報も出さないと使えないよ。
     # APIを叩く側はJSなので、JSONにしておくほうが便利。
     isodate = datetime.datetime.isoformat(datehour)
-    raw_data = observes(prefecture, isodate, zoom)
+    raw_data = backend.observes(prefecture, isodate, zoom, items=ITEMS)
+    if raw_data is None:
+        raise HTTPException(status_code=404, detail="Data not available")
+    # 付加情報を添える。単位なども必要。
+    data = dictize(raw_data, items=ITEMS)
+    return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
+
+
+@app.get("/ox/{prefecture}/{datehour}/{zoom}")
+async def predict_Ox(
+    prefecture: Literal[tuple(backend.Neighbors)],
+    datehour: datetime.datetime,
+    zoom: int,
+):
+    """県内のタイル点でのOX予測値を返す。
+
+    Args:
+    -   prefecture (str): 県名 ["kanagawa"]
+    -   isodate (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。
+    -   zoom (int): 地理院メッシュのzoom値
+
+    Returns:
+    -   _str_: 実測値
+    """
+    if prefecture not in backend.Neighbors:
+        raise HTTPException(status_code=404, detail="Out of the cover area")
+    # もうちょっと補助情報も出さないと使えないよ。
+    # APIを叩く側はJSなので、JSONにしておくほうが便利。
+    isodate = datetime.datetime.isoformat(datehour)
+    raw_data = backend.predict_ox(prefecture, isodate, zoom)
+    print(raw_data)
     if raw_data is None:
         raise HTTPException(status_code=404, detail="Data not available")
     data = dictize(raw_data)
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
-
-def predict(prefecture, isodate, zoom):
-    X = X_instant(prefecture, isodate, zoom)
-    basename = "../andersan-train/andersan0_1.py"
-    model = keras.models.load_model(f"{basename}.best.keras")
-    pred = model.predict(X)
-    return pred**0.5
-
-
-# @app.get("/ox/{prefecture}/{datehour}/{zoom}")
-# async def predict_ox(
-#     prefecture: Literal[tuple(prefecture_retrievers)],
-#     datehour: datetime.datetime,
-#     zoom: int,
-# ):
-#     """県内のタイル点でのOX予測値を返す。
-
-#     Args:
-#     -   prefecture (str): 県名 ["kanagawa"]
-#     -   isodate (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"]
-#     -   zoom (int): 地理院メッシュのzoom値
-
-#     Returns:
-#     -   _str_: 実測値
-#     """
-#     if prefecture not in Neighbors:
-#         raise HTTPException(status_code=404, detail="Out of the cover area")
-#     isodate = datetime.datetime.isoformat(datehour)
-
-#     y = predict(prefecture, isodate, zoom)
-#     if y is None:
-#         raise HTTPException(status_code=404, detail="Data not available")
-
-
-#     data = dictize(raw_data)
-#     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
@@ -164,6 +173,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "api:app",
         host="0.0.0.0",
-        port=8087,
+        port=8088,
         reload=True,
     )

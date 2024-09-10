@@ -7,18 +7,18 @@ import numpy as np
 from andersan_api.backend import prefecture_ranges
 
 
-def colorize(array, cmap="viridis"):
+def colorize(array, cmap="jet", ra=[0,100]):
     # 値を色に変換
-    normed_data = (array - np.nanmin(array)) / (np.nanmax(array) - np.nanmin(array))
+    normed_data = (array - ra[0]) / (ra[1] - ra[0])
     cm = plt.cm.get_cmap(cmap)
     return cm(normed_data)
 
 
-def map_layer(pref_name, values, name):
+def map_layer(pref_name, values, name, ra=[0,100]):
     pref_range = prefecture_ranges[pref_name]
 
     # 色に変換する。NaNは透明になるらしい
-    image = colorize(values)
+    image = colorize(values, ra=ra)
 
     return folium.raster_layers.ImageOverlay(
         image=image,
