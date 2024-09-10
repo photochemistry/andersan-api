@@ -18,7 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
-from andersan_backend import prefecture_retrievers, observes, Neighbors
+from andersan_api.backend import prefecture_retrievers, observes, Neighbors
 import json
 
 # class Predict(BaseModel):
