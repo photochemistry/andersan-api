@@ -22,6 +22,7 @@ folium = "^0.17.0"
 matplotlib = "^3.9.2"
 keras = "^3.5.0"
 tensorflow = "^2.17.0"
+sqlitedict = "^2.1.0"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.1.1"
