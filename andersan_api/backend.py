@@ -1,7 +1,7 @@
 # andersanのデータ取得関数群。APIに必要なもののみ集約する。
 # 1ファイルだけならディレクトリ階層は要らないが、とりあえず残す。
 
-from lru import cache, shelf_cache, sqlitedict_cache
+from .sqlitedictcache import sqlitedict_cache
 from airpollutionwatch import kanagawa, shizuoka, tokyo, chiba, yamanashi, amedas
 import pandas as pd
 import numpy as np

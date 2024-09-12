@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-lru = {git = "https://github.com/vitroid/typed-lru-cache.git"}
+typed_lru_cache = {git = "https://github.com/vitroid/typed-lru-cache.git"}
 airpollutionwatch = {git = "https://github.com/vitroid/airpollutionwatch.git"}
 pandas = "^2.2.2"
 numpy = "<2.0"
