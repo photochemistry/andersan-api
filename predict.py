@@ -1,9 +1,9 @@
 # andersanのデータ取得関数群。APIに必要なもののみ集約する。
-# 1ファイルだけならディレクトリ階層は要らないが、とりあえず残す。
 
 import datetime
 from datetime import timedelta
 from logging import getLogger, basicConfig, INFO, DEBUG
+import pytz
 
 import numpy as np
 import pandas as pd
@@ -15,19 +15,21 @@ from andersan import openmeteo, airmonitor
 
 class InvalidForecastingRangeError(Exception):
     """予報可能な時間範囲を越える場合に発生する例外"""
+
     pass
     # def __init__(self, message):
     #     self.message = message
     #     super().__init__(message)
 
-def X_instant(
+
+def X_openmeteo(
     pref_name: str,
-    isodate: str,
-    zoom: int,
-    lookback=24,
-    forecast=8,
-    items=("NMHC", "OX", "NOX", "TEMP", "WX", "WY"),
-    noaa_cols=(
+    isodatehour: str,
+    zoom: int = 12,
+    lookback_length: int = 24,
+    forecast_length: int = 8,
+    cols_lookbacks=("NMHC", "OX", "NOX", "TEMP", "WX", "WY"),
+    cols_forecasts=(
         "temperature_2m",
         "cloud_cover",
         "pressure_msl",
@@ -35,42 +37,82 @@ def X_instant(
         "wind_speed_10m",
     ),
     stdfilename="standards.json",
-):
+    openweathermap=False,
+) -> np.ndarray:
+    """NNの入力データXを構築する。
+
+    Args:
+        pref_name (str): 県名(半角ローマ字)
+        isodatehour (str): 目的の日時
+        zoom (int): 地理院タイルのレベル。12を想定。
+        lookback (int, optional): 24を指定すると23時間前〜現在の大気測定値を利用. Defaults to 24.
+        forecast (int, optional): 8を指定すると1時間先〜8時間先までの気象予報情報を利用_description_. Defaults to 8.
+        items (tuple, optional): 大気測定項目. Defaults to ("NMHC", "OX", "NOX", "TEMP", "WX", "WY").
+        noaa_cols (tuple, optional): 気象予報項目. Defaults to ( "temperature_2m", "cloud_cover", "pressure_msl", "shortwave_radiation", "wind_speed_10m", ).
+        stdfilename (str, optional): 各項目を標準化するための係数の情報のとりこみ. Defaults to "standards.json".
+        openweathermap (bool): OWMから予報値を入手する。いくつか条件を満たす場合に限り利用可能。
+
+    Returns:
+        _type_: _description_
+    """
     logger = getLogger()
 
+    # 現在時刻の予報で、日射量が必要ない場合に限りOpenWeathermapを指名できる。
+    if openweathermap:
+        if isodatehour == "now" and "shortwave_radiation" not in cols_forecasts:
+            logger.info("OpenWeathermap is selected.")
+        else:
+            logger.info(
+                "OpenWeathermap is requested but is not available for the specified condition."
+            )
+            openweathermap = False
+        logger.info(
+            "Anyway, OpenWeathermap is still not available for technical reasons."
+        )
+
+    # 時刻がnowになっている場合は日時に変換する。
+    if isodatehour == "now":
+        now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+        now = now.replace(minute=0, second=0, microsecond=0)
+        isodatehour = now.isoformat()
+
+    # lookback値の読みこみ
     air_table = pd.DataFrame()
-    timeorigin = datetime.datetime.fromisoformat(isodate)
-    for delta in range(-lookback+1, 1):
+    timeorigin = datetime.datetime.fromisoformat(isodatehour)
+    for delta in range(-lookback_length + 1, 1):
         dt = timeorigin + timedelta(hours=delta)
         table = airmonitor.tiles("kanagawa", dt.isoformat(), zoom)
         air_table = pd.concat([air_table, table], axis=0)
 
-    # if timeorigin.hour + forecast >= 24:
-    #     raise InvalidForecastingRangeError
+    # forecast値の読みこみ
     timebegin = timeorigin + timedelta(hours=1)
-    all_forecast_dataframe = openmeteo.tiles("kanagawa", datehour=timebegin.strftime("%Y-%m-%dT%H"), hours=forecast, zoom=zoom) 
+    all_forecast_dataframe = openmeteo.tiles(
+        "kanagawa",
+        datehour=timebegin.strftime("%Y-%m-%dT%H"),
+        hours=forecast_length,
+        zoom=zoom,
+    )
     tiles = np.unique(all_forecast_dataframe[["X", "Y"]].to_numpy(), axis=0)
     print(all_forecast_dataframe)
 
-    X0 = np.zeros([len(tiles), lookback, len(items)])
-    X2 = np.zeros([len(tiles), forecast, len(noaa_cols)])
-    X3 = np.zeros([len(tiles), forecast], dtype=int)
+    X0 = np.zeros([len(tiles), lookback_length, len(cols_lookbacks)])
+    X2 = np.zeros([len(tiles), forecast_length, len(cols_forecasts)])
+    X3 = np.zeros([len(tiles), forecast_length], dtype=int)
     for j, (tileX, tileY) in enumerate(tiles):
-        for i, item in enumerate(items):
-            X0[j, :, i] = air_table[
-                (air_table.X == tileX) & (air_table.Y == tileY)
-            ][item].to_numpy()
+        for i, item in enumerate(cols_lookbacks):
+            X0[j, :, i] = air_table[(air_table.X == tileX) & (air_table.Y == tileY)][
+                item
+            ].to_numpy()
         # print(X0)
 
-        for i, item in enumerate(noaa_cols):
+        for i, item in enumerate(cols_forecasts):
             X2[j, :, i] = all_forecast_dataframe[
                 (all_forecast_dataframe.X == tileX)
                 & (all_forecast_dataframe.Y == tileY)
             ][item]
 
         X3[j, :] = all_forecast_dataframe[
-            (all_forecast_dataframe.X == tileX)
-            & (all_forecast_dataframe.Y == tileY)
+            (all_forecast_dataframe.X == tileX) & (all_forecast_dataframe.Y == tileY)
         ]["weather_code"]
 
     X = {
@@ -93,24 +135,29 @@ def X_instant(
     return X
 
 
-class Foreseer():
+class Foreseer:
     def predict_ox(self, prefecture, isodate):
         pass
+
 
 class Foreseer_v0(Foreseer):
     def predict_ox(self, prefecture, isodate):
         # settings
         model = "andersan0_1"
         zoom = 12
-        lookback_hours=24
-        forecast_hours=8
-        stdfilename="/AIR/andersan-train/datatype3/standards.json"
-        
-        # タイルと時刻の情報を得る
-        table = airmonitor.tiles("kanagawa", isodate, zoom)
+        lookback_hours = 24
+        forecast_hours = 8
+        stdfilename = "/AIR/andersan-train/datatype3/standards.json"
 
         # NNに食わせるデータの生成
-        X = X_instant(prefecture, isodate, zoom, lookback=lookback_hours, forecast=forecast_hours, stdfilename=stdfilename)
+        X = X_openmeteo(
+            prefecture,
+            isodate,
+            zoom,
+            lookback_length=lookback_hours,
+            forecast_length=forecast_hours,
+            stdfilename=stdfilename,
+        )
 
         # モデルの準備
         model = keras.models.load_model(f"{model}.py.best.keras")
@@ -121,8 +168,17 @@ class Foreseer_v0(Foreseer):
         # andersan0_1はOX値の二乗を予測するので、ここで平方根をとって戻す。
         # 二乗を予測するのは、OXが大きい時の精度を高めるため。
         pred = pred**0.5
+
+        if isodate == "now":
+            now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+            now = now.replace(minute=0, second=0, microsecond=0)
+            isodate = now.isoformat()
+
+        # タイルと時刻の情報を得る
+        table = airmonitor.tiles("kanagawa", isodate, zoom)
+
         table = table.drop(columns=["OX", "NOX", "TEMP", "WX", "WY", "NMHC"])
-        for i in range(8):
+        for i in range(forecast_hours):
             table[f"+{i+1}"] = pred[:, i]
         return table
 
@@ -132,22 +188,22 @@ class Foreseer_v1(Foreseer):
         # settings
         model = "andersan0_2"
         zoom = 12
-        lookback_hours=24
-        forecast_hours=24
-        noaa_cols=(
-            "temperature_2m",
-            "cloud_cover",
-            "pressure_msl",
-            # "shortwave_radiation",
-            "wind_speed_10m",
-        )
-        stdfilename="/AIR/andersan-train/datatype4/standards.json"
-        
-        # タイルと時刻の情報を得る
-        table = airmonitor.tiles("kanagawa", isodate, zoom)
+        lookback_hours = 24
+        forecast_hours = 24
+        stdfilename = "/AIR/andersan-train/datatype4/standards.json"
+        with open("/AIR/andersan-train/datatype4/columns.json") as f:
+            col_names = json.load(f)
 
         # NNに食わせるデータの生成
-        X = X_instant(prefecture, isodate, zoom, lookback=lookback_hours, forecast=forecast_hours, noaa_cols=noaa_cols, stdfilename=stdfilename)
+        X = X_openmeteo(
+            prefecture,
+            isodate,
+            zoom,
+            lookback_length=lookback_hours,
+            forecast_length=forecast_hours,
+            cols_forecasts=col_names["Input_forecasts"],
+            stdfilename=stdfilename,
+        )
 
         # モデルの準備
         model = keras.models.load_model(f"{model}.py.best.keras")
@@ -158,8 +214,63 @@ class Foreseer_v1(Foreseer):
         # andersan0_1はOX値の二乗を予測するので、ここで平方根をとって戻す。
         # 二乗を予測するのは、OXが大きい時の精度を高めるため。
         pred = pred**0.5
-        table = table.drop(columns=["OX", "NOX", "TEMP", "WX", "WY", "NMHC"])
-        for i in range(8):
+
+        if isodate == "now":
+            now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+            now = now.replace(minute=0, second=0, microsecond=0)
+            isodate = now.isoformat()
+
+        # タイルと時刻の情報を得る
+        table = airmonitor.tiles("kanagawa", isodate, zoom)
+
+        table = table.drop(columns=col_names["Input_lookbacks"])
+        for i in range(forecast_hours):
+            table[f"+{i+1}"] = pred[:, i]
+        return table
+
+
+class Foreseer_v1a(Foreseer):
+    def predict_ox(self, prefecture, isodate):
+        # settings
+        model = "andersan0_2_1"
+        zoom = 12
+        lookback_hours = 24
+        forecast_hours = 24
+        stdfilename = "/AIR/andersan-train/datatype4/standards.json"
+        with open("/AIR/andersan-train/datatype4/columns.json") as f:
+            col_names = json.load(f)
+
+        # NNに食わせるデータの生成
+        X = X_openmeteo(
+            prefecture,
+            isodate,
+            zoom,
+            lookback_length=lookback_hours,
+            forecast_length=forecast_hours,
+            cols_forecasts=col_names["Input_forecasts"],
+            stdfilename=stdfilename,
+            openweathermap=True,  # 可能ならOWMを指定する
+        )
+
+        # モデルの準備
+        model = keras.models.load_model(f"{model}.py.best.keras")
+
+        # 予測
+        pred = model.predict(X)
+
+        # andersan0_1はOX値の二乗を予測するので、ここで平方根をとって戻す。
+        # 二乗を予測するのは、OXが大きい時の精度を高めるため。
+        pred = pred**0.5
+
+        if isodate == "now":
+            now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+            now = now.replace(minute=0, second=0, microsecond=0)
+            isodate = now.isoformat()
+
+        # タイルと時刻の情報を得る
+        table = airmonitor.tiles("kanagawa", isodate, zoom)
+        table = table.drop(columns=col_names["Input_lookbacks"])
+        for i in range(forecast_hours):
             table[f"+{i+1}"] = pred[:, i]
         return table
 
@@ -167,13 +278,15 @@ class Foreseer_v1(Foreseer):
 def test():
     basicConfig(level=DEBUG)
     logger = getLogger()
-    foreseer = Foreseer_v0()
+    foreseer = Foreseer_v1a()
     # logger.info(foreseer.predict_ox("kanagawa", "2025-02-20T09:00+09:00"))
-    logger.info(foreseer.predict_ox("kanagawa", "2015-08-19T09:00+09:00"))
+    # logger.info(foreseer.predict_ox("kanagawa", "2015-08-19T09:00+09:00"))
+    logger.info(foreseer.predict_ox("kanagawa", "now"))
 
 
 if __name__ == "__main__":
     import os
+
     # disable GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     test()
