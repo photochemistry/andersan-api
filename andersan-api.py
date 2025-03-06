@@ -4,7 +4,7 @@ import datetime
 import os
 from typing import List, Union, Literal
 from logging import getLogger, basicConfig, INFO, DEBUG
-
+import pandas as pd
 import numpy as np
 
 import uvicorn
@@ -103,7 +103,8 @@ def dictize(df, items=[]):
 
     data = dict()
     data["XY"] = df[["X", "Y"]].to_numpy().tolist()
-    data["lon"] = df[["lon", "lat"]].to_numpy().tolist()
+    data["lon"] = df["lon"].tolist()
+    data["lat"] = df["lat"].tolist()
     cols = df.columns
     for col in cols:
         if col not in loc:
@@ -232,6 +233,33 @@ async def predict_Ox(
 #         raise HTTPException(status_code=404, detail="Data not available")
 #     data = dictize(raw_data)
 #     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
+
+
+# 次のAPI: 確率換算表を提供する。/pmap/
+@app.get("/ptable/{model}")
+async def probability_table(
+    model: str,
+):
+    """NNの予測値を積分確率分布に変換する表を提供する。
+
+    Args:
+        model (str): 予測モデル。
+    """
+    # model switcher
+    if model == "v0":
+        MODEL = "andersan0_1"
+    elif model == "v0a":
+        MODEL = "andersan0_1_1"
+    elif model == "v1":
+        MODEL = "andersan0_2"
+    elif model == "v1a":
+        MODEL = "andersan0_2_1"
+    else:
+        raise InvalidModelException(model)
+
+    table = f"/AIR/andersan-train/{MODEL}.table.feather"
+    df = pd.read_feather(table)
+    return Response(content=df.to_json(indent=2))
 
 
 if __name__ == "__main__":
