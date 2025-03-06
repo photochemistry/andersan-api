@@ -1,36 +1,21 @@
 # 大幅にandersan/をリファクタリングしたので、調整が必要。
 
 import datetime
-import math
 import os
-from functools import lru_cache
-from logging import getLogger
 from typing import List, Union, Literal
 from logging import getLogger, basicConfig, INFO, DEBUG
 
 import numpy as np
 
-# import tenbou
 import uvicorn
 
-# from algorithms import algorithms
-# from cache import cache
 from fastapi import Depends, FastAPI, Request, status, HTTPException
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
 import andersan
 import andersan.airmonitor
 import predict
 import json
-
-# class Predict(BaseModel):
-#     loc: int = Field(example=14131030)
-#     date: Union[datetime.datetime, List] # 時刻を複数与えてもいい。
-#     algorithm: str = Field(example="mm_E")
-#     fmax: int = Field(example=24)
-#     col: str = Field(example="OX")
 
 
 app = FastAPI()
@@ -68,6 +53,14 @@ ITEMSPECS = {
         "range": [0, 100],
     },
 }
+
+
+class InvalidModelException(Exception):
+    """モデル指定がおかしい場合の例外"""
+
+    def __init__(self, model):
+        self.message = f"Model '{model}' is not available."
+        super().__init__(self.message)
 
 
 @app.get("/raw/{prefecture}/{datehour}")
@@ -147,7 +140,6 @@ async def tile_data(
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
 
-
 @app.get("/ox/{model}/{prefecture}/{datehour}")
 async def predict_Ox(
     prefecture: Literal[tuple(andersan.Neighbors)],
@@ -158,31 +150,88 @@ async def predict_Ox(
 
     Args:
     -   prefecture (str): 県名 ["kanagawa"]
-    -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。
-    -   model (str): 予測モデル。 "v0":andersan0_1(12th tile, 8 hours ahead.)
+    -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。あるいは、"now"で現時点での予測を返します。
+    -   model (str): 予測モデル。
+            "v0":andersan0_1(12th tile, 8 hours ahead.)
+            "v0":andersan0_1(12th tile, 8 hours ahead.)
+            "v0":andersan0_1(12th tile, 8 hours ahead.)
 
     Returns:
     -   _str_: 県内の地理院タイル点でのOxの予測値。
     """
 
+    # logger = getLogger()
+
     if prefecture not in andersan.Neighbors:
         raise HTTPException(status_code=404, detail="Out of the cover area")
 
-    # もうちょっと補助情報も出さないと使えないよ。
-    # APIを叩く側はJSなので、JSONにしておくほうが便利。
-    isodate = datetime.datetime.isoformat(datehour)
+    if datehour == "now":
+        isodate = "now"
+    else:
+        isodate = datetime.datetime.isoformat(datehour)
 
+    # prediction function switcher
     if model == "v0":
-        foreseer = predict.Foreseer_v0()
+        predict_ox = predict.predict_ox_v0
+    elif model == "v0a":
+        predict_ox = predict.predict_ox_v0a
     elif model == "v1":
-        foreseer = predict.Foreseer_v1()
+        predict_ox = predict.predict_ox_v1
+    elif model == "v1a":
+        predict_ox = predict.predict_ox_v1a
+    else:
+        raise InvalidModelException(model)
 
-    raw_data = foreseer.predict_ox(prefecture, isodate)
+    raw_data = predict_ox(prefecture, isodate)
+    # logger.debug(raw_data)
 
     if raw_data is None:
         raise HTTPException(status_code=404, detail="Data not available")
     data = dictize(raw_data)
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
+
+
+# @app.get("/oxnow/{model}/{prefecture}")
+# async def predict_Ox_now(
+#     prefecture: Literal[tuple(andersan.Neighbors)],
+#     model: str,
+# ):
+#     """県内のタイル点でのOX予測値を返す。
+
+#     Args:
+#     -   prefecture (str): 県名 ["kanagawa"]
+#     -   model (str): 予測モデル。 "v0":andersan0_1(12th tile, 8 hours ahead.)
+
+#     Returns:
+#     -   _str_: 県内の地理院タイル点でのOxの予測値。
+#     """
+
+#     # logger = getLogger()
+
+#     if prefecture not in andersan.Neighbors:
+#         raise HTTPException(status_code=404, detail="Out of the cover area")
+
+#     isodate = "now"
+
+#     # prediction function switcher
+#     if model == "v0":
+#         predict_ox = predict.predict_ox_v0
+#     elif model == "v0a":
+#         predict_ox = predict.predict_ox_v0a
+#     elif model == "v1":
+#         predict_ox = predict.predict_ox_v1
+#     elif model == "v1a":
+#         predict_ox = predict.predict_ox_v1a
+#     else:
+#         raise InvalidModelException(model)
+
+#     raw_data = predict_ox(prefecture, isodate)
+#     # logger.debug(raw_data)
+
+#     if raw_data is None:
+#         raise HTTPException(status_code=404, detail="Data not available")
+#     data = dictize(raw_data)
+#     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

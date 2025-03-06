@@ -135,153 +135,98 @@ def X_openmeteo(
     return X
 
 
-class Foreseer:
-    def predict_ox(self, prefecture, isodate):
-        pass
+def predict_ox(
+    prefecture,
+    isodate,
+    model="andersan0_2",
+    zoom=12,
+    lookback_hours=24,
+    forecast_hours=24,
+    datatype="/AIR/andersan-train/datatype4",
+):
+    stdfilename = datatype + "/standards.json"
+    with open(datatype + "/columns.json") as f:
+        col_names = json.load(f)
+
+    # NNに食わせるデータの生成
+    X = X_openmeteo(
+        prefecture,
+        isodate,
+        zoom,
+        lookback_length=lookback_hours,
+        forecast_length=forecast_hours,
+        cols_forecasts=col_names["Input_forecasts"],
+        stdfilename=stdfilename,
+    )
+
+    # モデルの準備
+    model = keras.models.load_model(f"{model}.py.best.keras")
+
+    # 予測
+    pred = model.predict(X)
+
+    # andersan0_1はOX値の二乗を予測するので、ここで平方根をとって戻す。
+    # 二乗を予測するのは、OXが大きい時の精度を高めるため。
+    pred = pred**0.5
+
+    if isodate == "now":
+        now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+        now = now.replace(minute=0, second=0, microsecond=0)
+        isodate = now.isoformat()
+
+    # タイルと時刻の情報を得る
+    table = airmonitor.tiles("kanagawa", isodate, zoom)
+
+    table = table.drop(columns=col_names["Input_lookbacks"])
+    for i in range(forecast_hours):
+        table[f"+{i+1}"] = pred[:, i]
+    return table
 
 
-class Foreseer_v0(Foreseer):
-    def predict_ox(self, prefecture, isodate):
-        # settings
-        model = "andersan0_1"
-        zoom = 12
-        lookback_hours = 24
-        forecast_hours = 8
-        stdfilename = "/AIR/andersan-train/datatype3/standards.json"
-
-        # NNに食わせるデータの生成
-        X = X_openmeteo(
-            prefecture,
-            isodate,
-            zoom,
-            lookback_length=lookback_hours,
-            forecast_length=forecast_hours,
-            stdfilename=stdfilename,
-        )
-
-        # モデルの準備
-        model = keras.models.load_model(f"{model}.py.best.keras")
-
-        # 予測
-        pred = model.predict(X)
-
-        # andersan0_1はOX値の二乗を予測するので、ここで平方根をとって戻す。
-        # 二乗を予測するのは、OXが大きい時の精度を高めるため。
-        pred = pred**0.5
-
-        if isodate == "now":
-            now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
-            now = now.replace(minute=0, second=0, microsecond=0)
-            isodate = now.isoformat()
-
-        # タイルと時刻の情報を得る
-        table = airmonitor.tiles("kanagawa", isodate, zoom)
-
-        table = table.drop(columns=["OX", "NOX", "TEMP", "WX", "WY", "NMHC"])
-        for i in range(forecast_hours):
-            table[f"+{i+1}"] = pred[:, i]
-        return table
-
-
-class Foreseer_v1(Foreseer):
-    def predict_ox(self, prefecture, isodate):
-        # settings
-        model = "andersan0_2"
-        zoom = 12
-        lookback_hours = 24
-        forecast_hours = 24
-        stdfilename = "/AIR/andersan-train/datatype4/standards.json"
-        with open("/AIR/andersan-train/datatype4/columns.json") as f:
-            col_names = json.load(f)
-
-        # NNに食わせるデータの生成
-        X = X_openmeteo(
-            prefecture,
-            isodate,
-            zoom,
-            lookback_length=lookback_hours,
-            forecast_length=forecast_hours,
-            cols_forecasts=col_names["Input_forecasts"],
-            stdfilename=stdfilename,
-        )
-
-        # モデルの準備
-        model = keras.models.load_model(f"{model}.py.best.keras")
-
-        # 予測
-        pred = model.predict(X)
-
-        # andersan0_1はOX値の二乗を予測するので、ここで平方根をとって戻す。
-        # 二乗を予測するのは、OXが大きい時の精度を高めるため。
-        pred = pred**0.5
-
-        if isodate == "now":
-            now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
-            now = now.replace(minute=0, second=0, microsecond=0)
-            isodate = now.isoformat()
-
-        # タイルと時刻の情報を得る
-        table = airmonitor.tiles("kanagawa", isodate, zoom)
-
-        table = table.drop(columns=col_names["Input_lookbacks"])
-        for i in range(forecast_hours):
-            table[f"+{i+1}"] = pred[:, i]
-        return table
-
-
-class Foreseer_v1a(Foreseer):
-    def predict_ox(self, prefecture, isodate):
-        # settings
-        model = "andersan0_2_1"
-        zoom = 12
-        lookback_hours = 24
-        forecast_hours = 24
-        stdfilename = "/AIR/andersan-train/datatype4/standards.json"
-        with open("/AIR/andersan-train/datatype4/columns.json") as f:
-            col_names = json.load(f)
-
-        # NNに食わせるデータの生成
-        X = X_openmeteo(
-            prefecture,
-            isodate,
-            zoom,
-            lookback_length=lookback_hours,
-            forecast_length=forecast_hours,
-            cols_forecasts=col_names["Input_forecasts"],
-            stdfilename=stdfilename,
-            openweathermap=True,  # 可能ならOWMを指定する
-        )
-
-        # モデルの準備
-        model = keras.models.load_model(f"{model}.py.best.keras")
-
-        # 予測
-        pred = model.predict(X)
-
-        # andersan0_1はOX値の二乗を予測するので、ここで平方根をとって戻す。
-        # 二乗を予測するのは、OXが大きい時の精度を高めるため。
-        pred = pred**0.5
-
-        if isodate == "now":
-            now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
-            now = now.replace(minute=0, second=0, microsecond=0)
-            isodate = now.isoformat()
-
-        # タイルと時刻の情報を得る
-        table = airmonitor.tiles("kanagawa", isodate, zoom)
-        table = table.drop(columns=col_names["Input_lookbacks"])
-        for i in range(forecast_hours):
-            table[f"+{i+1}"] = pred[:, i]
-        return table
+predict_ox_v0 = lambda prefecture, isodate: predict_ox(
+    prefecture,
+    isodate,
+    model="/AIR/andersan-train/andersan0_1",
+    zoom=12,
+    lookback_hours=24,
+    forecast_hours=8,
+    datatype="/AIR/andersan-train/datatype3",
+)
+predict_ox_v0a = lambda prefecture, isodate: predict_ox(
+    prefecture,
+    isodate,
+    model="/AIR/andersan-train/andersan0_1_1",
+    zoom=12,
+    lookback_hours=24,
+    forecast_hours=24,
+    datatype="/AIR/andersan-train/datatype5",
+)
+predict_ox_v1 = lambda prefecture, isodate: predict_ox(
+    prefecture,
+    isodate,
+    model="/AIR/andersan-train/andersan0_2",
+    zoom=12,
+    lookback_hours=24,
+    forecast_hours=24,
+    datatype="/AIR/andersan-train/datatype4",
+)
+predict_ox_v1a = lambda prefecture, isodate: predict_ox(
+    prefecture,
+    isodate,
+    model="/AIR/andersan-train/andersan0_2_1",
+    zoom=12,
+    lookback_hours=24,
+    forecast_hours=24,
+    datatype="/AIR/andersan-train/datatype4",
+)
 
 
 def test():
     basicConfig(level=DEBUG)
     logger = getLogger()
-    foreseer = Foreseer_v1a()
-    # logger.info(foreseer.predict_ox("kanagawa", "2025-02-20T09:00+09:00"))
-    # logger.info(foreseer.predict_ox("kanagawa", "2015-08-19T09:00+09:00"))
-    logger.info(foreseer.predict_ox("kanagawa", "now"))
+    # logger.info(predict_ox_v0("kanagawa", "2025-02-20T09:00+09:00"))
+    logger.info(predict_ox_v0("kanagawa", "2015-08-19T09:00+09:00"))
+    # logger.info(predict_ox_v0("kanagawa", "now"))
 
 
 if __name__ == "__main__":
