@@ -2,7 +2,7 @@
     import { onMount } from 'svelte';
     import 'leaflet/dist/leaflet.css';
     import L from 'leaflet';
-     import { fetchData, fetchAddress } from './retrieve.js';
+     import { fetchData, fetchAddress, unixTimeToJSTString } from './retrieve.js';
 
     let map;
     let ox_dict;
@@ -10,6 +10,7 @@
     let addr_dict;
     let ox_array;
     let now;
+    let X, Y;
     // let longitude;
     // let latitude;
 
@@ -17,26 +18,6 @@
         return array.findIndex(row => row[0] === targetValue1 && row[1] === targetValue2);
     }
 
-    function unixTimeToJSTString(unixTime) {
-        // Unixタイムをミリ秒に変換
-        const milliseconds = unixTime * 1000;
-
-        // Dateオブジェクトを作成
-        const date = new Date(milliseconds);
-
-        // JSTの日時文字列に変換
-        const jstString = date.toLocaleString('ja-JP', {
-            timeZone: 'Asia/Tokyo',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-        });
-
-        return jstString;
-    }
 
     onMount(() => {
         // 地図の初期化
@@ -94,8 +75,8 @@
         // console.log(ox.data);
         if (ox_dict !== undefined){
             if (addr_dict !== undefined){
-                let X = addr_dict.X;
-                let Y = addr_dict.Y;
+                X = addr_dict.X;
+                Y = addr_dict.Y;
                 // alert(X+":"+Y)
                 let row = findMatchingRowIndex(ox_dict.data.XY, X, Y);
                 ox_array = [];
@@ -114,6 +95,7 @@
 
 <button on:click={moveToCurrentLocation}>現在地に移動</button><br />
 現在地: {address}付近<br />
+地理院タイル: {X} {Y} (Zoomレベル12)<br />
 起点時刻: {now}<br />
 OX予測: {ox_array} ppm<br />
 120 ppm越え確率: (未完成)

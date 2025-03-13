@@ -1,6 +1,43 @@
+export function dateToJSTString(date) {
+
+    // JSTの日時文字列に変換
+    const jstString = date.toLocaleString('ja-JP', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false, // 24時間制
+    });
+
+    return jstString;
+}
+
+export function unixTimeToJSTString(unixTime) {
+    // Unixタイムをミリ秒に変換
+    const milliseconds = unixTime * 1000;
+
+    // Dateオブジェクトを作成
+    const date = new Date(milliseconds);
+
+    return dateToJSTString(date);
+}
+
+
+function getOneHourAgo(date) {
+    const newDate = new Date(date); // 元のDateオブジェクトを複製
+    newDate.setHours(newDate.getHours() - 6);
+    return newDate;
+  }
+  
+
 export async function fetchData() {
     try {
-        const response = await fetch('http://172.23.78.65:8087/ox/v1a/kanagawa/2025-03-13T09:00+09:00'); // APIエンドポイントを指定
+        let oneHourAgo = getOneHourAgo(new Date());
+        let isostring =  dateToJSTString(oneHourAgo).replace(/(\d+)\/(\d+)\/(\d+)\s(\d+):(\d+):(\d+)/, '$1-$2-$3T$4:$5:00+09:00');
+        const response = await fetch(`http://172.23.78.65:8087/ox/v1a/kanagawa/${isostring}`); // APIエンドポイントを指定
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
