@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import andersan
+from andersan.sqlitedictcache import sqlitedict_cache
 import andersan.airmonitor
 import predict
 import json
@@ -191,6 +192,88 @@ async def predict_Ox(
     data = dictize(raw_data)
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
+# 一般ユーザー視線(そしてスマホアプリ)でいえば、県内全体の情報を入手できるより、
+# 現在の座標での値だけ入手できたほうが便利。
+# ただし、現在の県単位の予測はもう崩したくない。
+# なので、簡易IFを作り、/oxの結果に加えて、現在地の情報(県、住所、タイル)を返す。
+# いや、違うな。現在地の換算のためだけのAPIを作る
+
+import geocoder
+
+def reverse_geocode_geocoder(lon, lat):
+    """
+    緯度経度から住所を逆ジオコーディングする関数
+
+    Args:
+        lon (float): 経度
+        lat (float): 緯度
+
+    Returns:
+        str: 住所 (取得できなかった場合はNone)
+    """
+    g = geocoder.osm([lat, lon], method='reverse')  # OpenStreetMapを使用
+    if g.ok:
+        return g.address
+    else:
+        return None
+
+from geopy.geocoders import Nominatim
+import time
+
+
+def reverse_geocode_geopy(lon, lat):
+    """
+    緯度経度から住所を逆ジオコーディングする関数
+
+    Args:
+        lon (float): 経度
+        lat (float): 緯度
+
+    Returns:
+        str: 住所 (取得できなかった場合はNone)
+    """
+    geolocator = Nominatim(user_agent="andersan")  # ユーザーエージェントを設定
+    try:
+        location = geolocator.reverse((lat, lon))
+        if location:
+            return location.address
+        else:
+            return None
+    except Exception as e:
+        print(f"エラーが発生しました: {e}")
+        return None
+
+@sqlitedict_cache("loc")
+@app.get("/loc/{lon}/{lat}")
+async def location(lon: float, lat:float)->str:
+    """緯度経度を住所などの情報に変換する。
+    
+    Args:
+        lon (float): 経度
+        lat (float): 緯度
+
+    Returns:
+        JSON str: 住所情報
+            X, Y (int): 地理院タイルのX,Y
+            Z (int): 地理院タイルのZoom
+            address (str): 指定された地点の住所
+            pref (str): 指定された地点の県名(アルファベット表記) 
+
+    """
+    x, y = andersan.tile.code(zoom=12, lon=lon, lat=lat)
+    address = reverse_geocode_geopy(lon, lat)
+
+    # タイルを含む県を返す。(神奈川の辺境のように、タイルに含まれていない場所もある)
+    prefecture = None
+    for pref, ra in andersan.prefecture_ranges.items():
+        if ra[0][0] <= lon < ra[1][0] and ra[0][1] <= lat < ra[1][1]:
+            prefecture = pref
+            break
+    
+    data = dict(X=int(x), Y=int(y), Z=12, address=address, pref=prefecture)
+    return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
+    
+    
 
 # @app.get("/oxnow/{model}/{prefecture}")
 # async def predict_Ox_now(

@@ -168,7 +168,7 @@ def predict_ox(
     # andersan0_1はOX値の二乗を予測するので、ここで平方根をとって戻す。
     # 二乗を予測するのは、OXが大きい時の精度を高めるため。
     pred = pred**0.5
-
+    
     if isodate == "now":
         now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
         now = now.replace(minute=0, second=0, microsecond=0)
@@ -180,7 +180,9 @@ def predict_ox(
     table = table.drop(columns=col_names["Input_lookbacks"])
     for i in range(forecast_hours):
         table[f"+{i+1}"] = pred[:, i]
-    return table
+
+    # NaNを-1にする。(jsonの制約のため)
+    return table.fillna(-1)
 
 
 predict_ox_v0 = lambda prefecture, isodate: predict_ox(
