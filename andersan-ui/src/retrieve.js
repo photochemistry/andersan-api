@@ -1,3 +1,7 @@
+
+// const API_URL="http://172.23.78.65:8087"
+const API_URL="http://192.168.3.234:8087"
+
 export function dateToJSTString(date) {
 
     // JSTの日時文字列に変換
@@ -28,7 +32,7 @@ export function unixTimeToJSTString(unixTime) {
 
 function getOneHourAgo(date) {
     const newDate = new Date(date); // 元のDateオブジェクトを複製
-    newDate.setHours(newDate.getHours() - 6);
+    newDate.setHours(newDate.getHours() - 9);
     return newDate;
   }
   
@@ -37,7 +41,8 @@ export async function fetchData() {
     try {
         let oneHourAgo = getOneHourAgo(new Date());
         let isostring =  dateToJSTString(oneHourAgo).replace(/(\d+)\/(\d+)\/(\d+)\s(\d+):(\d+):(\d+)/, '$1-$2-$3T$4:$5:00+09:00');
-        const response = await fetch(`http://172.23.78.65:8087/ox/v1a/kanagawa/${isostring}`); // APIエンドポイントを指定
+        let url = `${API_URL}/ox/v1a/kanagawa/${isostring}`;
+        const response = await fetch(url); // APIエンドポイントを指定
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -53,9 +58,10 @@ export async function fetchData() {
 //   fetchData()->then(result=>{console.log(result)}); // 関数を実行
 
 export async function fetchAddress(lon, lat){
-    http://172.23.78.65:8087/loc/139.34944444444446/35.33555555555556
     try {
-        const response = await fetch(`http://172.23.78.65:8087/loc/${lon}/${lat}`); // APIエンドポイントを指定
+        const url = `${API_URL}/loc/${lon}/${lat}`;
+        console.log(url);
+        const response = await fetch(url); // APIエンドポイントを指定
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
