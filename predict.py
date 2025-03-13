@@ -11,6 +11,7 @@ import json
 import keras
 
 from andersan import openmeteo, airmonitor
+from icecream import ic
 
 
 class InvalidForecastingRangeError(Exception):
@@ -83,6 +84,8 @@ def X_openmeteo(
         dt = timeorigin + timedelta(hours=delta)
         table = airmonitor.tiles("kanagawa", dt.isoformat(), zoom)
         air_table = pd.concat([air_table, table], axis=0)
+        ic(delta, dt, table)
+    ic(air_table.index.unique())
 
     # forecast値の読みこみ
     timebegin = timeorigin + timedelta(hours=1)
@@ -93,11 +96,12 @@ def X_openmeteo(
         zoom=zoom,
     )
     tiles = np.unique(all_forecast_dataframe[["X", "Y"]].to_numpy(), axis=0)
-    print(all_forecast_dataframe)
 
     X0 = np.zeros([len(tiles), lookback_length, len(cols_lookbacks)])
     X2 = np.zeros([len(tiles), forecast_length, len(cols_forecasts)])
     X3 = np.zeros([len(tiles), forecast_length], dtype=int)
+
+    # ここでエラーが出る、ということは、openmeteoではなく過去データの問題。なぜ?
     for j, (tileX, tileY) in enumerate(tiles):
         for i, item in enumerate(cols_lookbacks):
             X0[j, :, i] = air_table[(air_table.X == tileX) & (air_table.Y == tileY)][
@@ -120,6 +124,9 @@ def X_openmeteo(
         "Input_forecasts": X2,
         "Input_weathercodes": X3,
     }
+    logger.info(X0.shape)
+    logger.info(X2.shape)
+    logger.info(X3.shape)
 
     logger.info(f"Standardization with {stdfilename}")
 
@@ -168,7 +175,7 @@ def predict_ox(
     # andersan0_1はOX値の二乗を予測するので、ここで平方根をとって戻す。
     # 二乗を予測するのは、OXが大きい時の精度を高めるため。
     pred = pred**0.5
-    
+
     if isodate == "now":
         now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
         now = now.replace(minute=0, second=0, microsecond=0)

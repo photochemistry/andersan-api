@@ -15,6 +15,7 @@ sqlitedict = "^2.1.0"
 andersan = {path = "../andersan"}
 geocoder = "^1.38.1"
 geopy = "^2.4.1"
+icecream = "^2.1.4"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.1.1"

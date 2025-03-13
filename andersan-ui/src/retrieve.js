@@ -1,5 +1,5 @@
 
-// const API_URL="http://172.23.78.65:8087"
+// const API_URL="http://172.23.78.207:8087"
 const API_URL="http://192.168.3.234:8087"
 
 export function dateToJSTString(date) {
@@ -32,22 +32,23 @@ export function unixTimeToJSTString(unixTime) {
 
 function getOneHourAgo(date) {
     const newDate = new Date(date); // 元のDateオブジェクトを複製
-    newDate.setHours(newDate.getHours() - 9);
+    newDate.setHours(newDate.getHours() - 1);
+    // newDate.setHours(9);
     return newDate;
   }
   
 
 export async function fetchData() {
     try {
-        let oneHourAgo = getOneHourAgo(new Date());
-        let isostring =  dateToJSTString(oneHourAgo).replace(/(\d+)\/(\d+)\/(\d+)\s(\d+):(\d+):(\d+)/, '$1-$2-$3T$4:$5:00+09:00');
-        let url = `${API_URL}/ox/v1a/kanagawa/${isostring}`;
+        let now = new Date()
+        // let oneHourAgo = getOneHourAgo(now);
+        let isostring =  dateToJSTString(now).replace(/(\d+)\/(\d+)\/(\d+)\s(\d+):(\d+):(\d+)/, '$1-$2-$3T$4:00:00+09:00');
+        let url = `${API_URL}/ox/v0a/kanagawa/${isostring}`;
         const response = await fetch(url); // APIエンドポイントを指定
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json(); // レスポンスをJSON形式で取得
-        console.log(data); // 取得したデータをコンソールに表示
         return data; // 取得したデータを返す
     } catch (error) {
         console.error('データの取得中にエラーが発生しました:', error);
@@ -60,6 +61,21 @@ export async function fetchData() {
 export async function fetchAddress(lon, lat){
     try {
         const url = `${API_URL}/loc/${lon}/${lat}`;
+        const response = await fetch(url); // APIエンドポイントを指定
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json(); // レスポンスをJSON形式で取得
+        return data; // 取得したデータを返す
+    } catch (error) {
+        console.error('データの取得中にエラーが発生しました:', error);
+        // エラーハンドリングを行う
+    }
+}
+
+export async function fetchPtable(){
+    try {
+        const url = `${API_URL}/ptable/v0a`;
         console.log(url);
         const response = await fetch(url); // APIエンドポイントを指定
         if (!response.ok) {
@@ -73,3 +89,4 @@ export async function fetchAddress(lon, lat){
         // エラーハンドリングを行う
     }
 }
+

@@ -23,8 +23,9 @@ app = FastAPI()
 
 origins = [
     "*",
-    "http://localhost",
-    "http://172.23.78.218:8088",
+    "http://localhost:8087",
+    "http://172.23.78.207:8087",
+    "http://192.168.3.234:8087",
 ]
 
 app.add_middleware(
@@ -82,6 +83,7 @@ async def raw_data(
         raise HTTPException(status_code=404, detail="Out of the cover area")
     # もうちょっと補助情報も出さないと使えないよ。
     # APIを叩く側はJSなので、JSONにしておくほうが便利。
+    datehour = datehour.replace(minute=0, second=0, microsecond=0)
     isodate = datetime.datetime.isoformat(datehour)
     try:
         raw_data = andersan.airmonitor.prefecture_retrievers[prefecture].retrieve(
@@ -133,6 +135,7 @@ async def tile_data(
         raise HTTPException(status_code=404, detail="Out of the cover area")
     # もうちょっと補助情報も出さないと使えないよ。
     # APIを叩く側はJSなので、JSONにしておくほうが便利。
+    datehour = datehour.replace(minute=0, second=0, microsecond=0)
     isodate = datetime.datetime.isoformat(datehour)
     raw_data = andersan.airmonitor.tiles(prefecture, isodate, zoom, items=ITEMS)
     if raw_data is None:
@@ -152,7 +155,7 @@ async def predict_Ox(
 
     Args:
     -   prefecture (str): 県名 ["kanagawa"]
-    -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。あるいは、"now"で現時点での予測を返します。
+    -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。
     -   model (str): 予測モデル。
             "v0":andersan0_1(12th tile, 8 hours ahead.)
             "v0":andersan0_1(12th tile, 8 hours ahead.)
@@ -167,10 +170,8 @@ async def predict_Ox(
     if prefecture not in andersan.Neighbors:
         raise HTTPException(status_code=404, detail="Out of the cover area")
 
-    if datehour == "now":
-        isodate = "now"
-    else:
-        isodate = datetime.datetime.isoformat(datehour)
+    datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    isodate = datetime.datetime.isoformat(datehour)
 
     # prediction function switcher
     if model == "v0":
@@ -192,6 +193,7 @@ async def predict_Ox(
     data = dictize(raw_data)
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
+
 # 一般ユーザー視線(そしてスマホアプリ)でいえば、県内全体の情報を入手できるより、
 # 現在の座標での値だけ入手できたほうが便利。
 # ただし、現在の県単位の予測はもう崩したくない。
@@ -199,6 +201,7 @@ async def predict_Ox(
 # いや、違うな。現在地の換算のためだけのAPIを作る
 
 import geocoder
+
 
 def reverse_geocode_geocoder(lon, lat):
     """
@@ -211,11 +214,12 @@ def reverse_geocode_geocoder(lon, lat):
     Returns:
         str: 住所 (取得できなかった場合はNone)
     """
-    g = geocoder.osm([lat, lon], method='reverse')  # OpenStreetMapを使用
+    g = geocoder.osm([lat, lon], method="reverse")  # OpenStreetMapを使用
     if g.ok:
         return g.address
     else:
         return None
+
 
 from geopy.geocoders import Nominatim
 import time
@@ -243,11 +247,12 @@ def reverse_geocode_geopy(lon, lat):
         print(f"エラーが発生しました: {e}")
         return None
 
+
 @sqlitedict_cache("loc")
 @app.get("/loc/{lon}/{lat}")
-async def location(lon: float, lat:float)->str:
+async def location(lon: float, lat: float) -> str:
     """緯度経度を住所などの情報に変換する。
-    
+
     Args:
         lon (float): 経度
         lat (float): 緯度
@@ -257,7 +262,7 @@ async def location(lon: float, lat:float)->str:
             X, Y (int): 地理院タイルのX,Y
             Z (int): 地理院タイルのZoom
             address (str): 指定された地点の住所
-            pref (str): 指定された地点の県名(アルファベット表記) 
+            pref (str): 指定された地点の県名(アルファベット表記)
 
     """
     x, y = andersan.tile.code(zoom=12, lon=lon, lat=lat)
@@ -269,11 +274,10 @@ async def location(lon: float, lat:float)->str:
         if ra[0][0] <= lon < ra[1][0] and ra[0][1] <= lat < ra[1][1]:
             prefecture = pref
             break
-    
+
     data = dict(X=int(x), Y=int(y), Z=12, address=address, pref=prefecture)
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
-    
-    
+
 
 # @app.get("/oxnow/{model}/{prefecture}")
 # async def predict_Ox_now(

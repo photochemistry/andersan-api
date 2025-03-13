@@ -2,15 +2,17 @@
     import { onMount } from 'svelte';
     import 'leaflet/dist/leaflet.css';
     import L from 'leaflet';
-     import { fetchData, fetchAddress, unixTimeToJSTString } from './retrieve.js';
+     import { fetchData, fetchAddress, fetchPtable, unixTimeToJSTString } from './retrieve.js';
 
     let map;
     let ox_dict;
     let address;
     let addr_dict;
     let ox_array;
+    let p_array;
     let now;
     let X, Y;
+    let ptable;
     // let longitude;
     // let latitude;
 
@@ -40,7 +42,6 @@
         //   iconUrl: require('leaflet/dist/images/marker-icon.png'),
         //   shadowUrl: require('leaflet/dist/images/marker-shadow.png'),
         // });
-
     });
   
     // 現在地を取得して地図を移動する関数
@@ -57,6 +58,9 @@
         L.marker([latitude, longitude]).addTo(map); // 現在地にマーカーを追加
         fetchAddress(longitude, latitude).then(a=>{address=a.address; addr_dict = a;});
         fetchData().then(result=>{ox_dict=result});
+        if ( ptable === undefined ){
+            fetchPtable().then(result=>{ptable=result});
+        }
         
         //   navigator.geolocation.getCurrentPosition(
         //     (position) => {
@@ -86,8 +90,19 @@
                 now = unixTimeToJSTString(ox_dict.spec.timestamp[0]);
             }
         }
+        console.log([ptable, ox_array]);
+        if ( ptable !== undefined ){
+            if ( ox_array !== undefined ){
+                p_array = [];
+                for (let hr = 1; hr <= 24; hr++) {
+                    let ox = Math.floor(ox_array[hr-1]/5)*5;
+                    let b = `(${ox}, ${hr})`;
+                    let a = "120";
+                    p_array.push(Math.round(ptable[a][b]*100));
+                }
+            }
+        }
     }
-
 
 </script>
   
@@ -98,7 +113,7 @@
 地理院タイル: {X} {Y} (Zoomレベル12)<br />
 起点時刻: {now}<br />
 OX予測: {ox_array} ppm<br />
-120 ppm越え確率: (未完成)
+120 ppm越え確率(%): {p_array}
 
 <style>
     button {
