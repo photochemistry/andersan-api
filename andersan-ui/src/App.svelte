@@ -16,6 +16,7 @@
     let X, Y;
     let ptable;
     let myChart; // Add myChart variable
+    let currentLocationMarker;
 
     function findMatchingRowIndex(array, targetValue1, targetValue2) {
         return array.findIndex(row => row[0] === targetValue1 && row[1] === targetValue2);
@@ -36,7 +37,7 @@
 
     onMount(() => {
         // 地図の初期化
-        map = L.map('map').setView([0, 0], 13); // 初期位置は適宜設定
+        map = L.map('map', { zoomControl: false }).setView([0, 0], 13); // 初期位置は適宜設定
 
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -48,6 +49,8 @@
             iconUrl: '/images/marker-icon.png',
             shadowUrl: '/images/marker-shadow.png',
         });
+        // Add the zoom control in the bottom right corner of the screen.
+        // L.control.zoom({ position: 'bottomright' }).addTo(map); // This line is now commented out
     });
 
     // 現在地を取得して地図を移動する関数
@@ -60,8 +63,18 @@
         const latitude = 35 + 20 / 60 + 8 / 3600;
         const longitude = 139 + 20 / 60 + 58 / 3600;
         map.setView([latitude, longitude], 16); // 現在地に移動してズーム
-        L.marker([latitude, longitude]).addTo(map); // 現在地にマーカーを追加
-        fetchAddress(longitude, latitude).then(a => { address = a.address; addr_dict = a; });
+        // Remove the previous marker if it exists
+        if (currentLocationMarker) {
+            map.removeLayer(currentLocationMarker);
+        }
+
+        // Add the new marker
+        currentLocationMarker = L.marker([latitude, longitude]).addTo(map); // 現在地にマーカーを追加
+        fetchAddress(longitude, latitude).then(a => {
+            address = a.address;
+            addr_dict = a;
+            currentLocationMarker.bindPopup(`<div>${address}</div>`).openPopup();
+        });
         let now_aux = new Date();
         fetchData(now_aux).then(result => { ox_dict = result });
         if (ptable === undefined) {
@@ -193,8 +206,7 @@
     }
 </script>
 
-<div id="map" style="height: 100vh; width: 100vw;">
-    <div class="address-overlay">{address}</div>
+<div id="map">
     <div class="pmax-overlay">
         <div class="pmax-label">本日中に注意報が発令される確率</div>
         <div class="pmax-value">{p_max}%</div>
@@ -211,26 +223,51 @@
 
 
 <style>
+    /* Resetting default margins and paddings */
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
+    body,
+    html {
+        overflow: hidden;
+        /* Hide scrollbars */
+    }
+
     button {
-        z-index: 10;
+        z-index: 10000;
     }
 
     #map {
-        position: relative; /* Make the map a positioning context */
+        position: relative;
+        /* Make the map a positioning context */
+        height: 100vh;
+        width: 100vw;
     }
 
     .address-overlay {
-        position: absolute; /* Absolute positioning within the map */
-        top: 50%; /* Center vertically */
-        left: 50%; /* Center horizontally */
-        transform: translate(-50%, -50%); /* Adjust for element's size */
-        background-color: rgba(255, 255, 255, 0.5); /* Semi-transparent white */
+        position: absolute;
+        /* Absolute positioning within the map */
+        top: 50%;
+        /* Center vertically */
+        left: 50%;
+        /* Center horizontally */
+        transform: translate(-50%, -50%);
+        /* Adjust for element's size */
+        background-color: rgba(255, 255, 255, 0.5);
+        /* Semi-transparent white */
         padding: 4px;
         border-radius: 4px;
         border: 1px solid black;
         font-size: 12px;
-        text-align: center; /* Center text */
-        z-index: 1000; /* Ensure it's on top */
+        text-align: center;
+        /* Center text */
+        z-index: 1000;
+        /* Ensure it's on top */
+        white-space: nowrap;
+        /* Prevent text wrapping */
     }
 
     .chart-container {
@@ -239,18 +276,23 @@
         left: 0;
         width: 100%;
         height: 40%;
-        z-index: 900; /* Make sure it's above the map tiles but below the address */
+        z-index: 900;
+        /* Make sure it's above the map tiles but below the address */
     }
 
     .chart-overlay {
-        width: 100%; /* Make it as wide as the map */
-        height: 100%; /* Make it 40% of the map's height */
-        z-index: 900; /* Make sure it's above the map tiles but below the address */
+        width: 100%;
+        /* Make it as wide as the map */
+        height: 100%;
+        /* Make it 40% of the map's height */
+        z-index: 900;
+        /* Make sure it's above the map tiles but below the address */
     }
 
     .pmax-overlay {
         position: absolute;
-        top: 25%;
+        top: 10%;
+        /* Changed to 10% */
         left: 50%;
         transform: translateX(-50%);
         text-align: center;
@@ -262,7 +304,8 @@
 
     .pmax-label {
         font-size: 12pt;
-        margin-bottom: 5px; /* Add a little space between the label and the value */
+        margin-bottom: 5px;
+        /* Add a little space between the label and the value */
         color: black;
     }
 
@@ -276,7 +319,8 @@
         position: absolute;
         top: 10px;
         right: 10px;
-        background-color: rgba(255, 255, 255, 0.5); /* Semi-transparent white */
+        background-color: rgba(255, 255, 255, 0.5);
+        /* Semi-transparent white */
         padding: 4px;
         border-radius: 4px;
         border: 1px solid black;
@@ -288,27 +332,34 @@
         font-size: 12pt;
         color: black;
     }
+
     .current-location-button {
         position: absolute;
         bottom: 10px;
         right: 10px;
-        background: #333; /* No background color */
-        border: none; /* No border */
-        border-radius: 50%; /* Make it a circle */
+        background-color: #333; /* Dark gray background */
+        border: none;
+        /* No border */
+        border-radius: 50%;
+        /* Make it a circle */
         padding: 6px;
         /* box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3); */
         cursor: pointer;
-        z-index: 1000;
-        display:flex;
+        z-index: 10000; /* Ensure it's always on top */
+        display: flex;
         justify-content: center;
         align-items: center;
-        transition: transform 0.2s ease-in-out; /* Add a transition */
+        transition: transform 0.2s ease-in-out;
+        /* Add a transition */
     }
 
     .current-location-button img {
-        width: 32px; /* Adjust the icon size as needed */
+        width: 32px;
+        /* Adjust the icon size as needed */
         height: 32px;
+        /* filter: invert(1); Removed to enable the white icon */
     }
+
     .current-location-button:hover {
         transform: scale(1.1);
     }
