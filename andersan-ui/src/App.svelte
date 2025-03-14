@@ -196,7 +196,7 @@
                             beforeDraw: (chart) => {
                                 const ctx = chart.canvas.getContext('2d');
                                 ctx.save();
-                                ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'; // semi-transparent white
+                                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'; // semi-transparent white
                                 ctx.fillRect(0, 0, chart.width, chart.height);
                                 ctx.restore();
                             },
