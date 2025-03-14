@@ -84,8 +84,8 @@ def X_openmeteo(
         dt = timeorigin + timedelta(hours=delta)
         table = airmonitor.tiles("kanagawa", dt.isoformat(), zoom)
         air_table = pd.concat([air_table, table], axis=0)
-        ic(delta, dt, table)
-    ic(air_table.index.unique())
+        # ic(delta, dt, table)
+    # ic(air_table.index.unique())
 
     # forecast値の読みこみ
     timebegin = timeorigin + timedelta(hours=1)
