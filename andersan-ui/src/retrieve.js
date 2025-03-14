@@ -1,6 +1,6 @@
 
-// const API_URL="http://172.23.78.207:8087"
-const API_URL="http://192.168.3.234:8087"
+const API_URL="http://172.23.78.71:8087"
+// const API_URL="http://192.168.3.234:8087"
 
 export function dateToJSTString(date) {
 
@@ -38,9 +38,9 @@ function getOneHourAgo(date) {
   }
   
 
-export async function fetchData() {
+export async function fetchData(now) {
     try {
-        let now = new Date()
+        // let now = new Date()
         // let oneHourAgo = getOneHourAgo(now);
         let isostring =  dateToJSTString(now).replace(/(\d+)\/(\d+)\/(\d+)\s(\d+):(\d+):(\d+)/, '$1-$2-$3T$4:00:00+09:00');
         let url = `${API_URL}/ox/v0a/kanagawa/${isostring}`;

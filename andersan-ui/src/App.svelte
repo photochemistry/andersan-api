@@ -2,7 +2,7 @@
     import { onMount } from 'svelte';
     import 'leaflet/dist/leaflet.css';
     import L from 'leaflet';
-    import { fetchData, fetchAddress, fetchPtable, unixTimeToJSTString } from './retrieve.js';
+    import { fetchData, fetchAddress, fetchPtable } from './retrieve.js';
     import Chart from 'chart.js/auto';
 
     let map;
@@ -10,17 +10,22 @@
     let address;
     let addr_dict;
     let ox_array;
-    let p_array;
+    let p_array; // Renamed to p_array from z for consistency
+    let p_max;
     let now;
     let X, Y;
     let ptable;
-    // let longitude;
-    // let latitude;
+    let myChart; // Add myChart variable
 
     function findMatchingRowIndex(array, targetValue1, targetValue2) {
         return array.findIndex(row => row[0] === targetValue1 && row[1] === targetValue2);
     }
 
+    function formatTime(date) {
+        const hours = date.getHours().toString().padStart(2, '0');
+        const minutes = date.getMinutes().toString().padStart(2, '0');
+        return `${hours}:${minutes}`;
+    }
 
     onMount(() => {
         // 地図の初期化
@@ -30,124 +35,139 @@
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         }).addTo(map);
 
-        delete L.Icon.Default.prototype._getIconUrl; 
-        L.Icon.Default.mergeOptions({ 
-            iconRetinaUrl: '/images/marker-icon-2x.png', 
-            iconUrl: '/images/marker-icon.png', 
-            shadowUrl: '/images/marker-shadow.png', 
+        delete L.Icon.Default.prototype._getIconUrl;
+        L.Icon.Default.mergeOptions({
+            iconRetinaUrl: '/images/marker-icon-2x.png',
+            iconUrl: '/images/marker-icon.png',
+            shadowUrl: '/images/marker-shadow.png',
         });
-        // // Leafletのアイコンに関する設定（アイコンが表示されない問題の対策）
-        // delete L.Icon.Default.prototype._getIconUrl;
-        // L.Icon.Default.mergeOptions({
-        //   iconRetinaUrl: require('leaflet/dist/images/marker-icon-2x.png'),
-        //   iconUrl: require('leaflet/dist/images/marker-icon.png'),
-        //   shadowUrl: require('leaflet/dist/images/marker-shadow.png'),
-        // });
     });
-  
+
     // 現在地を取得して地図を移動する関数
     const moveToCurrentLocation = () => {
         if (!navigator.geolocation) {
             alert('Geolocation is not supported by your browser');
             return;
         }
-  
-        const latitude = 35+20/60+8/3600;
-        const longitude = 139+20/60+58/3600;
-        // alert(longitude + " " + latitude)
+
+        const latitude = 35 + 20 / 60 + 8 / 3600;
+        const longitude = 139 + 20 / 60 + 58 / 3600;
         map.setView([latitude, longitude], 16); // 現在地に移動してズーム
         L.marker([latitude, longitude]).addTo(map); // 現在地にマーカーを追加
-        fetchAddress(longitude, latitude).then(a=>{address=a.address; addr_dict = a;});
-        fetchData().then(result=>{ox_dict=result});
-        if ( ptable === undefined ){
-            fetchPtable().then(result=>{ptable=result});
+        fetchAddress(longitude, latitude).then(a => { address = a.address; addr_dict = a; });
+        let now_aux = new Date();
+        fetchData(now_aux).then(result => { ox_dict = result });
+        if (ptable === undefined) {
+            fetchPtable().then(result => { ptable = result });
         }
-        
-        //   navigator.geolocation.getCurrentPosition(
-        //     (position) => {
-        //       const { latitude, longitude } = position.coords;
-        //       map.setView([latitude, longitude], 16); // 現在地に移動してズーム
-        //       L.marker([latitude, longitude]).addTo(map); // 現在地にマーカーを追加
-        //     },
-        //     () => {
-        //       alert('Unable to retrieve your location');
-        //     }
-        //   );
     };
 
-    $:{
-        // 
-        // console.log(ox.data);
-        if (ox_dict !== undefined){
-            if (addr_dict !== undefined){
+    $: {
+        if (myChart) {
+            myChart.destroy();
+        }
+
+        if (ox_dict !== undefined) {
+            if (addr_dict !== undefined) {
                 X = addr_dict.X;
                 Y = addr_dict.Y;
-                // alert(X+":"+Y)
                 let row = findMatchingRowIndex(ox_dict.data.XY, X, Y);
                 ox_array = [];
                 for (let hr = 1; hr <= 24; hr++) {
                     ox_array.push(Math.round(ox_dict.data[`+${hr}`][row]));
                 }
-                now = unixTimeToJSTString(ox_dict.spec.timestamp[0]);
+                now = new Date(ox_dict.spec.timestamp[0] * 1000);
+                now.setMinutes(0);
+                now.setSeconds(0);
+                now.setMilliseconds(0);
             }
         }
-        console.log([ptable, ox_array]);
-        if ( ptable !== undefined ){
-            if ( ox_array !== undefined ){
-                p_array = [];
-                let ticks = []
+
+        if (ptable !== undefined) {
+            if (ox_array !== undefined) {
+                p_array = []; // Initialize p_array here
+                let ticks = [];
                 for (let hr = 1; hr <= 24; hr++) {
-                    let ox = Math.floor(ox_array[hr-1]/5)*5;
+                    let ox = Math.floor(ox_array[hr - 1] / 5) * 5;
                     let b = `(${ox}, ${hr})`;
                     let a = "120";
-                    p_array.push(Math.round(ptable[a][b]*100));
-                    ticks.push(hr)
+                    p_array.push(Math.round(ptable[a][b] * 100));
+                    ticks.push(hr);
                 }
+                p_max = Math.max(...p_array)
+                
+                let x = ticks.map((hr) => {
+                  const futureTime = new Date(now);
+                  futureTime.setHours(now.getHours() + hr);
+                  return `${formatTime(futureTime)} (+${hr})`;
+                });
 
-                // JavaScript
-                const ctx = document.getElementById('myChart').getContext('2d');
-                const x = ticks
-                const y = ox_array
-                const z = p_array; // 実数値の系列
+                let y1 = ox_array;
+                let y2 = p_array;
 
-                let data = [];
-                for (let i = 0; i < x.length - 1; i++) {
-                    const gradient = ctx.createLinearGradient(x[i], y[i], x[i + 1], y[i + 1]);
-                    gradient.addColorStop(0, `rgba(255, 0, 0, ${z[i]})`); // 開始色の透明度をzの値で調整
-                    gradient.addColorStop(1, `rgba(0, 0, 255, ${z[i + 1]})`); // 終了色の透明度をzの値で調整
-                    data.push({
-                        x: [x[i], x[i + 1]],
-                        y: [y[i], y[i + 1]],
-                        borderColor: gradient,
-                        borderWidth: 2,
-                        fill: false,
-                        pointRadius: 0,
+                if (x.length > 0 && y1.length > 0 && y2.length > 0) {
+                    const ctx = document.getElementById('myChart').getContext('2d');
+                    myChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: x,
+                            datasets: [
+                                {
+                                    label: 'OX Prediction (ppm)',
+                                    data: y1,
+                                    borderColor: 'rgb(75, 192, 192)',
+                                    tension: 0.1,
+                                    fill: false,
+                                    yAxisID: 'y',
+                                },
+                                {
+                                    label: 'Probability of exceeding 120ppm (%)',
+                                    data: y2,
+                                    borderColor: 'rgb(255, 99, 132)',
+                                    tension: 0.1,
+                                    fill: false,
+                                    yAxisID: 'y-right',
+                                },
+                            ],
+                        },
+                        options: {
+                            scales: {
+                                x: {
+                                    title: {
+                                        display: true,
+                                        text: 'Hours',
+                                    },
+                                },
+                                y: {
+                                    type: 'linear',
+                                    position: 'left',
+                                    beginAtZero: true,
+                                    title: {
+                                        display: true,
+                                        text: 'OX (ppm)',
+                                    },
+                                },
+                                'y-right': {
+                                    type: 'linear',
+                                    position: 'right',
+                                    beginAtZero: true,
+                                    title: {
+                                        display: true,
+                                        text: 'Probability (%)',
+                                    },
+                                    grid: {
+                                        drawOnChartArea: false,
+                                    },
+                                },
+                            },
+                        },
                     });
                 }
-                const myChart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        datasets: data,
-                    },
-                    options: {
-                        scales: {
-                            x: { type: 'linear', position: 'bottom' },
-                            y: { beginAtZero: true },
-                        },
-                        plugins: {
-                            legend: { display: false },
-                        },
-                    },
-                });
-            }   
-
-
-            
+            }
         }
     }
-
 </script>
-  
+
 <div id="map" style="height: 67vh; width: 100vw;"></div>
 
 <button on:click={moveToCurrentLocation}>現在地に移動</button><br />
@@ -155,9 +175,8 @@
 地理院タイル: {X} {Y} (Zoomレベル12)<br />
 起点時刻: {now}<br />
 OX予測: {ox_array} ppm<br />
-120 ppm越え確率(%): {p_array}<br />
+120 ppm越え確率(%): {p_max}<br />
 <canvas id="myChart"></canvas>
-
 
 <style>
     button {
