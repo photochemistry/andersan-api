@@ -188,6 +188,10 @@
 
 <div id="map" style="height: 67vh; width: 100vw;">
     <div class="address-overlay">{address}</div>
+    <div class="pmax-overlay">
+        <div class="pmax-label">本日中に注意報が発令される確率</div>
+        <div class="pmax-value">{p_max}%</div>
+    </div>
     <div class="chart-container">
         <canvas id="myChart" class="chart-overlay"></canvas>
     </div>
@@ -196,8 +200,6 @@
 <button on:click={moveToCurrentLocation}>現在地に移動</button><br />
 地理院タイル: {X} {Y} (Zoomレベル12)<br />
 起点時刻: {now}<br />
-OX予測: {ox_array} ppm<br />
-120 ppm越え確率(%): {p_max}<br />
 
 <style>
     button {
@@ -221,6 +223,7 @@ OX予測: {ox_array} ppm<br />
         text-align: center; /* Center text */
         z-index: 1000; /* Ensure it's on top */
     }
+
     .chart-container {
         position: absolute;
         bottom: 0;
@@ -234,5 +237,25 @@ OX予測: {ox_array} ppm<br />
         width: 100%; /* Make it as wide as the map */
         height: 100%; /* Make it 40% of the map's height */
         z-index: 900; /* Make sure it's above the map tiles but below the address */
+    }
+    .pmax-overlay {
+        position: absolute;
+        top: 25%;
+        left: 50%;
+        transform: translateX(-50%);
+        text-align: center;
+        z-index: 1000;
+    }
+
+    .pmax-label {
+        font-size: 12pt;
+        margin-bottom: 5px; /* Add a little space between the label and the value */
+        color: black;
+    }
+
+    .pmax-value {
+        font-size: 36pt;
+        font-weight: bold;
+        color: black;
     }
 </style>
