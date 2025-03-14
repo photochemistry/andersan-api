@@ -204,9 +204,11 @@
     <div class="chart-container">
         <canvas id="myChart" class="chart-overlay"></canvas>
     </div>
+    <button class="current-location-button" on:click={moveToCurrentLocation}>
+        <img src="/images/near_me.svg" alt="現在地に移動" />
+    </button>
 </div>
 
-<button on:click={moveToCurrentLocation}>現在地に移動</button><br />
 
 <style>
     button {
@@ -281,8 +283,33 @@
         font-size: 12px;
         z-index: 1000;
     }
+
     .start-time-overlay {
         font-size: 12pt;
         color: black;
+    }
+    .current-location-button {
+        position: absolute;
+        bottom: 10px;
+        right: 10px;
+        background: #333; /* No background color */
+        border: none; /* No border */
+        border-radius: 50%; /* Make it a circle */
+        padding: 6px;
+        /* box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3); */
+        cursor: pointer;
+        z-index: 1000;
+        display:flex;
+        justify-content: center;
+        align-items: center;
+        transition: transform 0.2s ease-in-out; /* Add a transition */
+    }
+
+    .current-location-button img {
+        width: 32px; /* Adjust the icon size as needed */
+        height: 32px;
+    }
+    .current-location-button:hover {
+        transform: scale(1.1);
     }
 </style>
