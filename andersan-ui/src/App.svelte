@@ -12,7 +12,7 @@
     let ox_array;
     let p_array; // Renamed to p_array from z for consistency
     let p_max;
-    let now;
+    let now = new Date();
     let X, Y;
     let ptable;
     let myChart; // Add myChart variable
@@ -25,6 +25,13 @@
         const hours = date.getHours().toString().padStart(2, '0');
         const minutes = date.getMinutes().toString().padStart(2, '0');
         return `${hours}:${minutes}`;
+    }
+
+    function formatStartTime(date) {
+        const month = (date.getMonth() + 1).toString().padStart(2, '0'); // Month is 0-indexed
+        const day = date.getDate().toString().padStart(2, '0');
+        const hour = date.getHours().toString().padStart(2, '0');
+        return `${month}月${day}日 ${hour}時時点`; // Changed format here
     }
 
     onMount(() => {
@@ -73,6 +80,10 @@
         if (myChart) {
             myChart.destroy();
         }
+        // set now to be the begining of the current hour.
+        now.setMinutes(0);
+        now.setSeconds(0);
+        now.setMilliseconds(0);
 
         if (ox_dict !== undefined) {
             if (addr_dict !== undefined) {
@@ -83,10 +94,6 @@
                 for (let hr = 1; hr <= 24; hr++) {
                     ox_array.push(Math.round(ox_dict.data[`+${hr}`][row]));
                 }
-                now = new Date(ox_dict.spec.timestamp[0] * 1000);
-                now.setMinutes(0);
-                now.setSeconds(0);
-                now.setMilliseconds(0);
             }
         }
 
@@ -191,15 +198,15 @@
     <div class="pmax-overlay">
         <div class="pmax-label">本日中に注意報が発令される確率</div>
         <div class="pmax-value">{p_max}%</div>
+        <div class="start-time-overlay">{formatStartTime(now)}</div>
     </div>
+    <div class="tile-info-overlay">{X} {Y}</div>
     <div class="chart-container">
         <canvas id="myChart" class="chart-overlay"></canvas>
     </div>
 </div>
 
 <button on:click={moveToCurrentLocation}>現在地に移動</button><br />
-地理院タイル: {X} {Y} (Zoomレベル12)<br />
-起点時刻: {now}<br />
 
 <style>
     button {
@@ -238,6 +245,7 @@
         height: 100%; /* Make it 40% of the map's height */
         z-index: 900; /* Make sure it's above the map tiles but below the address */
     }
+
     .pmax-overlay {
         position: absolute;
         top: 25%;
@@ -245,6 +253,9 @@
         transform: translateX(-50%);
         text-align: center;
         z-index: 1000;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
     }
 
     .pmax-label {
@@ -256,6 +267,22 @@
     .pmax-value {
         font-size: 36pt;
         font-weight: bold;
+        color: black;
+    }
+
+    .tile-info-overlay {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background-color: rgba(255, 255, 255, 0.5); /* Semi-transparent white */
+        padding: 4px;
+        border-radius: 4px;
+        border: 1px solid black;
+        font-size: 12px;
+        z-index: 1000;
+    }
+    .start-time-overlay {
+        font-size: 12pt;
         color: black;
     }
 </style>
