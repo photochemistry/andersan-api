@@ -1,5 +1,5 @@
 <script>
-    import { onMount } from 'svelte';
+    import { onMount, afterUpdate } from 'svelte';
     import 'leaflet/dist/leaflet.css';
     import L from 'leaflet';
     import { fetchData, fetchAddress, fetchPtable } from './retrieve.js';
@@ -61,6 +61,13 @@
             fetchPtable().then(result => { ptable = result });
         }
     };
+
+    afterUpdate(() => {
+        // Resize the chart after the chart is created and after svelte's DOM has been updated
+        if (myChart) {
+            myChart.resize();
+        }
+    });
 
     $: {
         if (myChart) {
@@ -131,6 +138,7 @@
                             ],
                         },
                         options: {
+                            maintainAspectRatio: false, // Disable aspect ratio to make the chart as high as the container
                             scales: {
                                 x: {
                                     title: {
@@ -169,7 +177,8 @@
 </script>
 
 <div id="map" style="height: 67vh; width: 100vw;">
-  <div class="address-overlay">{address}</div>
+    <div class="address-overlay">{address}</div>
+    <canvas id="myChart" class="chart-overlay"></canvas>
 </div>
 
 <button on:click={moveToCurrentLocation}>現在地に移動</button><br />
@@ -177,12 +186,12 @@
 起点時刻: {now}<br />
 OX予測: {ox_array} ppm<br />
 120 ppm越え確率(%): {p_max}<br />
-<canvas id="myChart"></canvas>
 
 <style>
     button {
         z-index: 10;
     }
+
     #map {
         position: relative; /* Make the map a positioning context */
     }
@@ -199,5 +208,14 @@ OX予測: {ox_array} ppm<br />
         font-size: 12px;
         text-align: center; /* Center text */
         z-index: 1000; /* Ensure it's on top */
+    }
+
+    .chart-overlay {
+        position: absolute; /* Position it absolutely */
+        bottom: 0; /* Align the bottom of the chart to the bottom of the map */
+        left: 0;
+        width: 100%; /* Make it as wide as the map */
+        height: 40%; /* Make it 40% of the map's height */
+        z-index: 900; /* Make sure it's above the map tiles but below the address */
     }
 </style>
