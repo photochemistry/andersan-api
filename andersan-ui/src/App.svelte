@@ -193,7 +193,7 @@
     }
 </script>
 
-<div id="map" style="height: 67vh; width: 100vw;">
+<div id="map" style="height: 100vh; width: 100vw;">
     <div class="address-overlay">{address}</div>
     <div class="pmax-overlay">
         <div class="pmax-label">本日中に注意報が発令される確率</div>
