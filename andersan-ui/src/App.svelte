@@ -5,7 +5,6 @@
     import { fetchData, fetchAddress, fetchPtable } from './retrieve.js';
     import Chart from 'chart.js/auto';
 
-    let chartDrawn = false;
     let map;
     let ox_dict;
     let address = "";
@@ -20,6 +19,7 @@
     let currentLocationMarker;
     let center = [35.331586, 139.349782]; // 地図の中心座標を保持する変数
     let debounceTimer; // デバウンスタイマー
+    let updateFlag = false; // データ更新があったかどうかを示すフラグ
 
     function findMatchingRowIndex(array, targetValue1, targetValue2) {
         return array.findIndex(row => row[0] === targetValue1 && row[1] === targetValue2);
@@ -133,8 +133,8 @@
         }
     }
 
-    function updateCenter() {
-        chartDrawn = false;
+    async function updateCenter() {
+        updateFlag = false;
         const c = map.getCenter();
         center = [c.lat, c.lng];
         console.log("center updated")
@@ -144,17 +144,19 @@
         if (currentLocationMarker) {
             map.removeLayer(currentLocationMarker);
         }
-
         currentLocationMarker = L.marker([latitude, longitude]).addTo(map);
-        fetchAddress(longitude, latitude).then(a => {
-            address = a.address;
-            addr_dict = a;
-            currentLocationMarker.bindPopup(`<div>${address}</div>`).openPopup();
-        });
-        fetchData(now).then(result => { ox_dict = result });
-        if (ptable === undefined) {
-            fetchPtable().then(result => { ptable = result });
-        }
+
+        // 非同期処理をまとめて実行
+        await Promise.all([
+            fetchAddress(longitude, latitude).then(a => {
+                address = a.address;
+                addr_dict = a;
+                currentLocationMarker.bindPopup(`<div>${address}</div>`).openPopup();
+            }),
+            fetchData(now).then(result => { ox_dict = result }),
+            ptable === undefined ? fetchPtable().then(result => { ptable = result }) : Promise.resolve()
+        ]);
+        updateFlag = true;
     }
 
     function debounceUpdateCenter() {
@@ -192,7 +194,7 @@
 
         const latitude = 35 + 20 / 60 + 8 / 3600;
         const longitude = 139 + 20 / 60 + 58 / 3600;
-        //map.setView([latitude, longitude], 16);
+        map.setView([latitude, longitude], 12);
     };
 
     afterUpdate(() => {
@@ -201,8 +203,7 @@
         }
     });
 
-    $: {
-        console.log(center);
+    $: if (updateFlag) {
         now.setMinutes(0);
         now.setSeconds(0);
         now.setMilliseconds(0);
