@@ -12,7 +12,7 @@
     let ox_array;
     let p_array; // Renamed to p_array from z for consistency
     let p_max;
-    let now = new Date();
+    let now = new Date("2015-07-27 06:00+09:00"); // changed default time
     let X, Y;
     let ptable;
     let myChart; // Add myChart variable
@@ -49,8 +49,6 @@
             iconUrl: '/images/marker-icon.png',
             shadowUrl: '/images/marker-shadow.png',
         });
-        // Add the zoom control in the bottom right corner of the screen.
-        // L.control.zoom({ position: 'bottomright' }).addTo(map); // This line is now commented out
     });
 
     // 現在地を取得して地図を移動する関数
@@ -75,8 +73,7 @@
             addr_dict = a;
             currentLocationMarker.bindPopup(`<div>${address}</div>`).openPopup();
         });
-        let now_aux = new Date();
-        fetchData(now_aux).then(result => { ox_dict = result });
+        fetchData(now).then(result => { ox_dict = result });
         if (ptable === undefined) {
             fetchPtable().then(result => { ptable = result });
         }
@@ -183,6 +180,11 @@
                                     title: {
                                         display: true,
                                         text: 'Probability (%)',
+                                    },
+                                    min: 0,         // Set the minimum value to 0
+                                    max: 100,       // Set the maximum value to 100
+                                    ticks: {
+                                        stepSize: 20   // Optional: Set the step size for tick marks
                                     },
                                     grid: {
                                         drawOnChartArea: false,
