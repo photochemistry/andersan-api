@@ -5,13 +5,14 @@
     import { fetchData, fetchAddress, fetchPtable } from './retrieve.js';
     import Chart from 'chart.js/auto';
 
+    let chartDrawn = false;
     let map;
     let ox_dict;
     let address = "";
     let addr_dict;
     let ox_array;
     let p_array;
-    let p_max;
+    let p_max = 0;
     let now = new Date("2015-07-27 06:00+09:00");
     let X, Y;
     let ptable;
@@ -36,8 +37,104 @@
         const hour = date.getHours().toString().padStart(2, '0');
         return `${month}月${day}日 ${hour}時時点`;
     }
+    //グラフ描画関数を定義
+    function drawChart(ox_array, p_array, now) {
+        if (myChart) {
+            myChart.destroy();
+            myChart = null;
+        }
+        if (ox_array === undefined || p_array === undefined) return;
+        let ticks = [];
+        for (let hr = 1; hr <= 24; hr++) {
+            ticks.push(hr);
+        }
+        let x = ticks.map((hr) => {
+            const futureTime = new Date(now);
+            futureTime.setHours(now.getHours() + hr);
+            return `${formatTime(futureTime)} (+${hr})`;
+        });
+
+        let y1 = ox_array;
+        let y2 = p_array;
+
+        if (x.length > 0 && y1.length > 0 && y2.length > 0) {
+            const ctx = document.getElementById('myChart').getContext('2d');
+            myChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: x,
+                    datasets: [
+                        {
+                            label: 'OX Prediction (ppm)',
+                            data: y1,
+                            borderColor: 'rgb(75, 192, 192)',
+                            tension: 0.1,
+                            fill: false,
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'Probability of exceeding 120ppm (%)',
+                            data: y2,
+                            borderColor: 'rgb(255, 99, 132)',
+                            tension: 0.1,
+                            fill: false,
+                            yAxisID: 'y-right',
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Hours',
+                            },
+                        },
+                        y: {
+                            type: 'linear',
+                            position: 'left',
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'OX (ppm)',
+                            },
+                        },
+                        'y-right': {
+                            type: 'linear',
+                            position: 'right',
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Probability (%)',
+                            },
+                            min: 0,
+                            max: 100,
+                            ticks: {
+                                stepSize: 20
+                            },
+                            grid: {
+                                drawOnChartArea: false,
+                            },
+                        },
+                    },
+                },
+                plugins: [{
+                    beforeDraw: (chart) => {
+                        const ctx = chart.canvas.getContext('2d');
+                        ctx.save();
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                        ctx.fillRect(0, 0, chart.width, chart.height);
+                        ctx.restore();
+                    },
+                }]
+            });
+        }
+    }
 
     function updateCenter() {
+        chartDrawn = false;
         const c = map.getCenter();
         center = [c.lat, c.lng];
         console.log("center updated")
@@ -64,9 +161,6 @@
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(updateCenter, 1000);
     }
-    $: {
-        console.log(center);
-    }
 
     onMount(() => {
         // 平塚市中心部を初期表示、ズームレベルを12に設定
@@ -85,6 +179,9 @@
 
         // moveend イベントのリスナーを追加
         map.on('moveend', debounceUpdateCenter);
+
+        // 初期表示時に updateCenter を実行
+        updateCenter();
     });
 
     const moveToCurrentLocation = () => {
@@ -105,13 +202,11 @@
     });
 
     $: {
-        if (myChart) {
-            myChart.destroy();
-        }
+        console.log(center);
         now.setMinutes(0);
         now.setSeconds(0);
         now.setMilliseconds(0);
-
+        //ox_arrayの計算
         if (ox_dict !== undefined) {
             if (addr_dict !== undefined) {
                 X = addr_dict.X;
@@ -123,105 +218,19 @@
                 }
             }
         }
-
-        if (ptable !== undefined) {
-            if (ox_array !== undefined) {
-                p_array = [];
-                let ticks = [];
-                for (let hr = 1; hr <= 24; hr++) {
-                    let ox = Math.floor(ox_array[hr - 1] / 5) * 5;
-                    let b = `(${ox}, ${hr})`;
-                    let a = "120";
-                    p_array.push(Math.round(ptable[a][b] * 100));
-                    ticks.push(hr);
-                }
-                p_max = Math.max(...p_array)
-
-                let x = ticks.map((hr) => {
-                    const futureTime = new Date(now);
-                    futureTime.setHours(now.getHours() + hr);
-                    return `${formatTime(futureTime)} (+${hr})`;
-                });
-
-                let y1 = ox_array;
-                let y2 = p_array;
-
-                if (x.length > 0 && y1.length > 0 && y2.length > 0) {
-                    const ctx = document.getElementById('myChart').getContext('2d');
-                    myChart = new Chart(ctx, {
-                        type: 'line',
-                        data: {
-                            labels: x,
-                            datasets: [
-                                {
-                                    label: 'OX Prediction (ppm)',
-                                    data: y1,
-                                    borderColor: 'rgb(75, 192, 192)',
-                                    tension: 0.1,
-                                    fill: false,
-                                    yAxisID: 'y',
-                                },
-                                {
-                                    label: 'Probability of exceeding 120ppm (%)',
-                                    data: y2,
-                                    borderColor: 'rgb(255, 99, 132)',
-                                    tension: 0.1,
-                                    fill: false,
-                                    yAxisID: 'y-right',
-                                },
-                            ],
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            scales: {
-                                x: {
-                                    title: {
-                                        display: true,
-                                        text: 'Hours',
-                                    },
-                                },
-                                y: {
-                                    type: 'linear',
-                                    position: 'left',
-                                    beginAtZero: true,
-                                    title: {
-                                        display: true,
-                                        text: 'OX (ppm)',
-                                    },
-                                },
-                                'y-right': {
-                                    type: 'linear',
-                                    position: 'right',
-                                    beginAtZero: true,
-                                    title: {
-                                        display: true,
-                                        text: 'Probability (%)',
-                                    },
-                                    min: 0,
-                                    max: 100,
-                                    ticks: {
-                                        stepSize: 20
-                                    },
-                                    grid: {
-                                        drawOnChartArea: false,
-                                    },
-                                },
-                            },
-                        },
-                        plugins: [{
-                            beforeDraw: (chart) => {
-                                const ctx = chart.canvas.getContext('2d');
-                                ctx.save();
-                                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-                                ctx.fillRect(0, 0, chart.width, chart.height);
-                                ctx.restore();
-                            },
-                        }]
-                    });
-                }
+        //p_arrayの計算
+        if (ptable !== undefined && ox_array !== undefined) {
+             p_array = [];
+             for (let hr = 1; hr <= 24; hr++) {
+                let ox = Math.floor(ox_array[hr - 1] / 5) * 5;
+                let b = `(${ox}, ${hr})`;
+                let a = "120";
+                p_array.push(Math.round(ptable[a][b] * 100));
             }
+            p_max = Math.max(...p_array);
         }
+        //グラフ描画処理
+        drawChart(ox_array, p_array, now);
     }
 </script>
 
