@@ -138,6 +138,7 @@
                             ],
                         },
                         options: {
+                            responsive: true, // Enable responsiveness.
                             maintainAspectRatio: false, // Disable aspect ratio to make the chart as high as the container
                             scales: {
                                 x: {
@@ -169,6 +170,15 @@
                                 },
                             },
                         },
+                        plugins: [{
+                            beforeDraw: (chart) => {
+                                const ctx = chart.canvas.getContext('2d');
+                                ctx.save();
+                                ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'; // semi-transparent white
+                                ctx.fillRect(0, 0, chart.width, chart.height);
+                                ctx.restore();
+                            },
+                        }]
                     });
                 }
             }
@@ -178,7 +188,9 @@
 
 <div id="map" style="height: 67vh; width: 100vw;">
     <div class="address-overlay">{address}</div>
-    <canvas id="myChart" class="chart-overlay"></canvas>
+    <div class="chart-container">
+        <canvas id="myChart" class="chart-overlay"></canvas>
+    </div>
 </div>
 
 <button on:click={moveToCurrentLocation}>現在地に移動</button><br />
@@ -209,13 +221,18 @@ OX予測: {ox_array} ppm<br />
         text-align: center; /* Center text */
         z-index: 1000; /* Ensure it's on top */
     }
+    .chart-container {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        height: 40%;
+        z-index: 900; /* Make sure it's above the map tiles but below the address */
+    }
 
     .chart-overlay {
-        position: absolute; /* Position it absolutely */
-        bottom: 0; /* Align the bottom of the chart to the bottom of the map */
-        left: 0;
         width: 100%; /* Make it as wide as the map */
-        height: 40%; /* Make it 40% of the map's height */
+        height: 100%; /* Make it 40% of the map's height */
         z-index: 900; /* Make sure it's above the map tiles but below the address */
     }
 </style>
