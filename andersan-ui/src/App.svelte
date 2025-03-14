@@ -7,7 +7,7 @@
 
     let map;
     let ox_dict;
-    let address;
+    let address = ""; // initialize address to empty string
     let addr_dict;
     let ox_array;
     let p_array; // Renamed to p_array from z for consistency
@@ -95,11 +95,11 @@
                     ticks.push(hr);
                 }
                 p_max = Math.max(...p_array)
-                
+
                 let x = ticks.map((hr) => {
-                  const futureTime = new Date(now);
-                  futureTime.setHours(now.getHours() + hr);
-                  return `${formatTime(futureTime)} (+${hr})`;
+                    const futureTime = new Date(now);
+                    futureTime.setHours(now.getHours() + hr);
+                    return `${formatTime(futureTime)} (+${hr})`;
                 });
 
                 let y1 = ox_array;
@@ -168,10 +168,11 @@
     }
 </script>
 
-<div id="map" style="height: 67vh; width: 100vw;"></div>
+<div id="map" style="height: 67vh; width: 100vw;">
+  <div class="address-overlay">{address}</div>
+</div>
 
 <button on:click={moveToCurrentLocation}>現在地に移動</button><br />
-現在地: {address}付近<br />
 地理院タイル: {X} {Y} (Zoomレベル12)<br />
 起点時刻: {now}<br />
 OX予測: {ox_array} ppm<br />
@@ -181,5 +182,22 @@ OX予測: {ox_array} ppm<br />
 <style>
     button {
         z-index: 10;
+    }
+    #map {
+        position: relative; /* Make the map a positioning context */
+    }
+
+    .address-overlay {
+        position: absolute; /* Absolute positioning within the map */
+        top: 50%; /* Center vertically */
+        left: 50%; /* Center horizontally */
+        transform: translate(-50%, -50%); /* Adjust for element's size */
+        background-color: rgba(255, 255, 255, 0.5); /* Semi-transparent white */
+        padding: 4px;
+        border-radius: 4px;
+        border: 1px solid black;
+        font-size: 12px;
+        text-align: center; /* Center text */
+        z-index: 1000; /* Ensure it's on top */
     }
 </style>
