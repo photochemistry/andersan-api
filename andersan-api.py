@@ -26,6 +26,7 @@ origins = [
     "http://localhost:8087",
     "http://172.23.78.207:8087",
     "http://192.168.3.234:8087",
+    "http://172.23.78.44:8080", # ここにクライアントのIPを書くの???
 ]
 
 app.add_middleware(
@@ -200,25 +201,6 @@ async def predict_Ox(
 # なので、簡易IFを作り、/oxの結果に加えて、現在地の情報(県、住所、タイル)を返す。
 # いや、違うな。現在地の換算のためだけのAPIを作る
 
-import geocoder
-
-
-def reverse_geocode_geocoder(lon, lat):
-    """
-    緯度経度から住所を逆ジオコーディングする関数
-
-    Args:
-        lon (float): 経度
-        lat (float): 緯度
-
-    Returns:
-        str: 住所 (取得できなかった場合はNone)
-    """
-    g = geocoder.osm([lat, lon], method="reverse")  # OpenStreetMapを使用
-    if g.ok:
-        return g.address
-    else:
-        return None
 
 
 from geopy.geocoders import Nominatim
