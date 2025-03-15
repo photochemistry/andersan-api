@@ -8,15 +8,13 @@
     let map;
     let ox_dict;
     let address = "";
-    let addr_dict;
+    let addr_dict = {};
     let ox_array;
     let p_array;
     let p_max = 0;
     let now = new Date("2015-07-27 06:00+09:00");
-    let X, Y;
     let ptable;
     let myChart;
-    let currentLocationMarker;
     let center = [35.331586, 139.349782]; // 地図の中心座標を保持する変数
     let debounceTimer; // デバウンスタイマー
     let updateFlag = false; // データ更新があったかどうかを示すフラグ
@@ -138,25 +136,22 @@
         const c = map.getCenter();
         center = [c.lat, c.lng];
         console.log("center updated")
-        const latitude = c.lat
-        const longitude = c.lng
-        // map.setView([latitude, longitude], 12);
-        if (currentLocationMarker) {
-            map.removeLayer(currentLocationMarker);
-        }
-        currentLocationMarker = L.marker([latitude, longitude]).addTo(map);
-
         // 非同期処理をまとめて実行
         await Promise.all([
-            fetchAddress(longitude, latitude).then(a => {
-                address = a.address;
-                addr_dict = a;
-                currentLocationMarker.bindPopup(`<div>${address}</div>`).openPopup();
-            }),
             fetchData(now).then(result => { ox_dict = result }),
             ptable === undefined ? fetchPtable().then(result => { ptable = result }) : Promise.resolve()
         ]);
         updateFlag = true;
+    }
+
+    async function updateAddress() {
+        const c = map.getCenter();
+        const latitude = c.lat;
+        const longitude = c.lng;
+         await fetchAddress(longitude, latitude).then(a => {
+                address = a.address;
+                addr_dict = a;
+         });
     }
 
     function debounceUpdateCenter() {
@@ -172,18 +167,11 @@
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         }).addTo(map);
 
-        delete L.Icon.Default.prototype._getIconUrl;
-        L.Icon.Default.mergeOptions({
-            iconRetinaUrl: '/images/marker-icon-2x.png',
-            iconUrl: '/images/marker-icon.png',
-            shadowUrl: '/images/marker-shadow.png',
-        });
-
         // moveend イベントのリスナーを追加
-        map.on('moveend', debounceUpdateCenter);
-
+        map.on('moveend', updateAddress);
         // 初期表示時に updateCenter を実行
         updateCenter();
+        updateAddress();
     });
 
     const moveToCurrentLocation = () => {
@@ -195,6 +183,7 @@
         const latitude = 35 + 20 / 60 + 8 / 3600;
         const longitude = 139 + 20 / 60 + 58 / 3600;
         map.setView([latitude, longitude], 12);
+        updateCenter();
     };
 
     afterUpdate(() => {
@@ -210,9 +199,7 @@
         //ox_arrayの計算
         if (ox_dict !== undefined) {
             if (addr_dict !== undefined) {
-                X = addr_dict.X;
-                Y = addr_dict.Y;
-                let row = findMatchingRowIndex(ox_dict.data.XY, X, Y);
+                let row = findMatchingRowIndex(ox_dict.data.XY, addr_dict.X, addr_dict.Y);
                 ox_array = [];
                 for (let hr = 1; hr <= 24; hr++) {
                     ox_array.push(Math.round(ox_dict.data[`+${hr}`][row]));
@@ -221,8 +208,8 @@
         }
         //p_arrayの計算
         if (ptable !== undefined && ox_array !== undefined) {
-             p_array = [];
-             for (let hr = 1; hr <= 24; hr++) {
+            p_array = [];
+            for (let hr = 1; hr <= 24; hr++) {
                 let ox = Math.floor(ox_array[hr - 1] / 5) * 5;
                 let b = `(${ox}, ${hr})`;
                 let a = "120";
@@ -236,13 +223,16 @@
 </script>
 
 <div id="map">
-    <div class="center-overlay">{center[0].toFixed(6)}, {center[1].toFixed(6)}</div>
+    <div class="crosshair-container">
+        <img class="crosshair" src="/images/crosshair.svg" alt="Target" />
+    </div>
+    <div class="address-overlay">{address}</div>
     <div class="pmax-overlay">
-        <div class="pmax-label">本日中に注意報が発令される確率</div>
+        <div class="pmax-label">本日中に注意報発令レベルに達する確率</div>
         <div class="pmax-value">{p_max}%</div>
         <div class="start-time-overlay">{formatStartTime(now)}</div>
     </div>
-    <div class="tile-info-overlay">{X} {Y}</div>
+    <div class="tile-info-overlay">{addr_dict.X} {addr_dict.Y}</div>
     <div class="chart-container">
         <canvas id="myChart" class="chart-overlay"></canvas>
     </div>
@@ -274,19 +264,35 @@
         width: 100vw;
     }
 
-    .address-overlay {
-        position: absolute;
+    .crosshair-container {
+        position: fixed;
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
-        background-color: rgba(255, 255, 255, 0.5);
+        z-index: 10000;
+        pointer-events: none; /* アイコンがクリックイベントを邪魔しないようにする */
+        display: flex; /* 画像を中央に配置するためのFlexbox */
+        justify-content: center; /* 水平方向の中央揃え */
+        align-items: center; /* 垂直方向の中央揃え */
+    }
+
+    .crosshair {
+        width: 32px; /* アイコンのサイズを調整 */
+        height: 32px;
+    }
+
+    .address-overlay {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        background-color: rgba(255, 255, 255, 0.7);
         padding: 4px;
         border-radius: 4px;
         border: 1px solid black;
         font-size: 12px;
-        text-align: center;
-        z-index: 1000;
+        z-index: 10000;
         white-space: nowrap;
+        pointer-events: none; /* クリックイベントを邪魔しないようにする */
     }
 
     .chart-container {
@@ -368,18 +374,5 @@
 
     .current-location-button:hover {
         transform: scale(1.1);
-    }
-
-    /* center-overlay のスタイル */
-    .center-overlay {
-        position: absolute;
-        top: 10px;
-        left: 10px;
-        background-color: rgba(255, 255, 255, 0.5);
-        padding: 4px;
-        border-radius: 4px;
-        border: 1px solid black;
-        font-size: 12px;
-        z-index: 1000;
     }
 </style>
