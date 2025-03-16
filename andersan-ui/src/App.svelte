@@ -139,19 +139,13 @@
         // 非同期処理をまとめて実行
         await Promise.all([
             fetchData(now).then(result => { ox_dict = result }),
+            fetchAddress(c.lng, c.lat).then(a => {
+                address = a.address;
+                addr_dict = a;
+            }),
             ptable === undefined ? fetchPtable().then(result => { ptable = result }) : Promise.resolve()
         ]);
         updateFlag = true;
-    }
-
-    async function updateAddress() {
-        const c = map.getCenter();
-        const latitude = c.lat;
-        const longitude = c.lng;
-         await fetchAddress(longitude, latitude).then(a => {
-                address = a.address;
-                addr_dict = a;
-         });
     }
 
     function debounceUpdateCenter() {
@@ -168,10 +162,9 @@
         }).addTo(map);
 
         // moveend イベントのリスナーを追加
-        map.on('moveend', updateAddress);
+        map.on('moveend', debounceUpdateCenter);
         // 初期表示時に updateCenter を実行
         updateCenter();
-        updateAddress();
     });
 
     const moveToCurrentLocation = () => {
@@ -198,7 +191,7 @@
         now.setMilliseconds(0);
         //ox_arrayの計算
         if (ox_dict !== undefined) {
-            if (addr_dict !== undefined) {
+            if (addr_dict.X !== undefined && addr_dict.Y !==undefined) {
                 let row = findMatchingRowIndex(ox_dict.data.XY, addr_dict.X, addr_dict.Y);
                 ox_array = [];
                 for (let hr = 1; hr <= 24; hr++) {
