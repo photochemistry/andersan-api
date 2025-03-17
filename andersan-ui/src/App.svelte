@@ -249,11 +249,6 @@
         box-sizing: border-box;
     }
 
-    body,
-    html {
-        overflow: hidden;
-    }
-
     button {
         z-index: 10000;
     }
