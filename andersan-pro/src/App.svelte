@@ -1,5 +1,6 @@
 <script>
 	import axios from 'axios';
+	import { onMount } from 'svelte';
 
 	let prefecture = 'kanagawa'; // デフォルトの都道府県
 	let model = 'v0a'; // モデルを v0a に固定
@@ -32,8 +33,8 @@
 		try {
 			const formattedDatehour = getCurrentISO8601(); // 現在時刻を取得 (JST)
 			const response = await axios.get(
-				`http://172.23.78.71:8087/ox/${model}/${prefecture}/${formattedDatehour}`
-				// `http://192.168.3.234:8087/ox/${model}/${prefecture}/${formattedDatehour}`
+				// `http://172.23.78.71:8087/ox/${model}/${prefecture}/${formattedDatehour}`
+				`http://192.168.3.234:8087/ox/${model}/${prefecture}/${formattedDatehour}`
 			);
 
 			// データの整形
@@ -50,16 +51,13 @@
 	}
 
 	// 初期データ取得
-	fetchData();
+	onMount(fetchData);
 
 	// 都道府県変更時の処理
 	function handlePrefectureChange(event) {
 		prefecture = event.target.value;
 		fetchData();
 	}
-
-	// 定期的にデータを更新する
-	setInterval(fetchData, 60000); // 60秒ごとに更新
 </script>
 
 <main>
