@@ -80,12 +80,30 @@ def X_openmeteo(
     # lookback値の読みこみ
     air_table = pd.DataFrame()
     timeorigin = datetime.datetime.fromisoformat(isodatehour)
+    missing_newest = False
     for delta in range(-lookback_length + 1, 1):
         dt = timeorigin + timedelta(hours=delta)
         table = airmonitor.tiles("kanagawa", dt.isoformat(), zoom)
-        air_table = pd.concat([air_table, table], axis=0)
-        # ic(delta, dt, table)
-    # ic(air_table.index.unique())
+        if table is None:
+            ic(f"TimeDelta={delta}")
+        if delta == 0 and table is None:
+            # 最新データを取得しそこねた
+            # 代わりに、24時間前のデータを取得
+            dt = timeorigin + timedelta(hours=-lookback_length)
+            table = airmonitor.tiles("kanagawa", dt.isoformat(), zoom)
+            # air_tableの先頭にくっつける
+            air_table = pd.concat([table, air_table], axis=0)
+            missing_newest = True
+        else:
+            air_table = pd.concat([air_table, table], axis=0)
+
+    if missing_newest:
+        # 現在時刻を1時間ずらす。
+        timeorigin = timeorigin + timedelta(hours=-1)
+        ic(f"Newest observed data are missing.")
+
+    # 念のため、ほかの時刻表現を消しておく
+    del isodatehour
 
     # forecast値の読みこみ
     timebegin = timeorigin + timedelta(hours=1)
@@ -123,6 +141,7 @@ def X_openmeteo(
         "Input_lookbacks": X0,
         "Input_forecasts": X2,
         "Input_weathercodes": X3,
+        "timeorigin": timeorigin,
     }
     logger.info(X0.shape)
     logger.info(X2.shape)
@@ -166,6 +185,10 @@ def predict_ox(
         stdfilename=stdfilename,
     )
 
+    timeorigin = X["timeorigin"]
+    del X["timeorigin"]
+    del isodate
+
     # モデルの準備
     model = keras.models.load_model(f"{model}.py.best.keras")
 
@@ -176,13 +199,8 @@ def predict_ox(
     # 二乗を予測するのは、OXが大きい時の精度を高めるため。
     pred = pred**0.5
 
-    if isodate == "now":
-        now = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
-        now = now.replace(minute=0, second=0, microsecond=0)
-        isodate = now.isoformat()
-
     # タイルと時刻の情報を得る
-    table = airmonitor.tiles("kanagawa", isodate, zoom)
+    table = airmonitor.tiles("kanagawa", timeorigin.isoformat(), zoom)
 
     table = table.drop(columns=col_names["Input_lookbacks"])
     for i in range(forecast_hours):
