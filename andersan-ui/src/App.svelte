@@ -163,8 +163,9 @@
         // 平塚市中心部を初期表示、ズームレベルを12に設定
         map = L.map('map', { zoomControl: false }).setView([35.331586, 139.349782], 12);
 
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/blank/{z}/{x}/{y}.png', {
+            maxZoom: 18,
+            attribution: '© <a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>'
         }).addTo(map);
 
         // moveend イベントのリスナーを追加
