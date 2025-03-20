@@ -13,6 +13,7 @@
 	let ptableLoading = false; // 確率表取得中のローディング状態
 	let ptableRows = []; // 確率表の行データを保持する変数
 	let ptableColumns = []; // 確率表のカラムデータを保持する変数
+	const zValue = 120; // z の値を 120 に固定
 
 	// 日時を ISO 8601 形式に変換する関数 (JST に対応)
 	function getISO8601(date) {
@@ -124,6 +125,14 @@
 		selectedDateTime = event.target.value;
 		fetchData();
 	}
+
+	// ptable から確率を取得する関数
+	function getProbability(x, y) {
+		if (!ptableRows || ptableRows.length === 0) return null;
+		const row = ptableRows.find(row => Math.floor(x / 5) * 5 === row.index1 && row.index2 === y); // 修正箇所
+		if (!row || row[zValue] === undefined) return null; // 修正箇所
+		return Math.round(row[zValue] * 100);
+	}
 </script>
 
 <main>
@@ -171,8 +180,16 @@
 							<td>{oxData.lon[i].toFixed(2)}</td>
 							<td>{oxData.lat[i].toFixed(2)}</td>
 							{#each Array.from({ length: 24 }, (_, j) => j + 1) as hour}
-								<td style={Math.round(oxData[`+${hour}`][i]) > 40 ? 'color: red;' : ''}>
+								<td>
 									{Math.round(oxData[`+${hour}`][i])}
+									{#if ptable}
+										<br />
+										{#if getProbability(Math.round(oxData[`+${hour}`][i]), hour) !== null}
+											{getProbability(Math.round(oxData[`+${hour}`][i]), hour)}%
+										{:else}
+											-
+										{/if}
+									{/if}
 								</td>
 							{/each}
 						</tr>
