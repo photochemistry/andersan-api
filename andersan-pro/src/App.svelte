@@ -4,15 +4,15 @@
 
 	let prefecture = 'kanagawa'; // デフォルトの都道府県
 	let model = 'v0a'; // モデルを v0a に固定
-	let oxData = [];
+	let oxData = {}; // 初期値を空のオブジェクトに変更
 	let loading = false;
 	let error = null;
+	let selectedDateTime = 'now'; // デフォルトは現在時刻
 
-	// 日時を ISO 8601 形式に変換する関数 (現在時刻用、JST に対応)
-	function getCurrentISO8601() {
-		const now = new Date();
+	// 日時を ISO 8601 形式に変換する関数 (JST に対応)
+	function getISO8601(date) {
 		const jstOffset = 9 * 60; // JST は UTC+9 なので、9時間分のオフセットを分単位で設定
-		const utc = now.getTime() + (now.getTimezoneOffset() * 60000); // UTC に変換
+		const utc = date.getTime() + (date.getTimezoneOffset() * 60000); // UTC に変換
 		const jst = new Date(utc + (jstOffset * 60000)); // JST に変換
 
 		const year = jst.getFullYear();
@@ -28,10 +28,15 @@
 	async function fetchData() {
 		loading = true;
 		error = null;
-		oxData = [];
+		oxData = {}; // 取得前に空オブジェクトに初期化
 
 		try {
-			const formattedDatehour = getCurrentISO8601(); // 現在時刻を取得 (JST)
+			let formattedDatehour;
+			if (selectedDateTime === 'now') {
+				formattedDatehour = getISO8601(new Date()); // 現在時刻を取得 (JST)
+			} else {
+				formattedDatehour = selectedDateTime;
+			}
 			const response = await axios.get(
 				// `http://172.23.78.71:8087/ox/${model}/${prefecture}/${formattedDatehour}`
 				`http://192.168.3.234:8087/ox/${model}/${prefecture}/${formattedDatehour}`
@@ -44,7 +49,16 @@
 			oxData = data; // data をそのまま oxData に代入
 
 		} catch (err) {
-			error = err.message || 'データの取得に失敗しました。';
+			if (err.response) {
+                // サーバーがエラーレスポンスを返した場合
+                error = `データ取得エラー: ${err.response.status} - ${err.response.statusText}`;
+            } else if (err.request) {
+                // リクエストが送信されたが、レスポンスが受信されなかった場合
+                error = 'データ取得エラー: サーバーからの応答がありません。';
+            } else {
+                // エラーをセットアップする際に何か問題が発生した場合
+                error = 'データ取得エラー: リクエストを送信できませんでした。';
+            }
 		} finally {
 			loading = false;
 		}
@@ -56,6 +70,12 @@
 	// 都道府県変更時の処理
 	function handlePrefectureChange(event) {
 		prefecture = event.target.value;
+		fetchData();
+	}
+
+	// 時刻変更時の処理
+	function handleDateTimeChange(event) {
+		selectedDateTime = event.target.value;
 		fetchData();
 	}
 </script>
@@ -71,11 +91,22 @@
 		</select>
 	</div>
 
+	<div>
+		<label for="dateTime">時刻:</label>
+		<select id="dateTime" bind:value={selectedDateTime} on:change={handleDateTimeChange}>
+			<option value="now">現在時刻</option>
+			<option value="2015-07-27T06:00:00+09:00">2015年7月27日午前6時</option>
+			<option value="2011-08-13T06:00:00+09:00">2011年8月13日午前6時</option>
+			<!-- 他の過去の時刻もここに追加 -->
+		</select>
+	</div>
+
 	{#if loading}
 		<p>データを読み込み中です...</p>
 	{:else if error}
 		<p style="color: red;">エラー: {error}</p>
-	{:else if oxData !== undefined}
+	{:else}
+	    {#if oxData && oxData.XY && oxData.lon && oxData.lat && Array.isArray(oxData.XY) && Array.isArray(oxData.lon) && Array.isArray(oxData.lat)}
 		<table>
 			<thead>
 				<tr>
@@ -102,8 +133,9 @@
 				{/each}
 			</tbody>
 		</table>
-	{:else}
+        {:else}
 		<p>データがありません。</p>
+	    {/if}
 	{/if}
 </main>
 
