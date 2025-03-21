@@ -34,7 +34,9 @@
 	async function fetchData() {
 		loading = true;
 		error = null;
-		oxData = {}; // 取得前に空オブジェクトに初期化
+		if (Object.keys(oxData).length === 0) {
+			oxData = {}; // 取得前に空オブジェクトに初期化
+		}
 
 		try {
 			let formattedDatehour;
@@ -128,10 +130,40 @@
 
 	// ptable から確率を取得する関数
 	function getProbability(x, y) {
+		if (!ptable) return null; // ptable が null の場合は null を返す
 		if (!ptableRows || ptableRows.length === 0) return null;
 		const row = ptableRows.find(row => Math.floor(x / 5) * 5 === row.index1 && row.index2 === y); // 修正箇所
 		if (!row || row[zValue] === undefined) return null; // 修正箇所
 		return Math.round(row[zValue] * 100);
+	}
+
+	// 確率に応じた背景色を返す関数
+	function getBackgroundColor(ptable, oxData, hour, i) {
+		if (!ptable) return 'white'; // ptable が null の場合は white を返す
+		const probability = getProbability(Math.round(oxData[`+${hour}`][i]), hour);
+
+		if (probability === null) return 'white'; // null の場合は white を返す
+
+		let hue, saturation, lightness;
+
+		if (probability <= 25) {
+			// 0% - 25%: 水色から灰色へ
+			hue = 180; // 水色
+			saturation = 100 - (probability / 25) * 100; // 100% -> 0%
+			lightness = 80 - (probability / 25) * 30; // 80% -> 50%
+		} else if (probability <= 50) {
+			// 25% - 50%: 灰色から赤色へ
+			hue = 0; // 赤色
+			saturation = ( (probability - 25) / 25) * 100; // 0% -> 100%
+			lightness = 50 + ((probability - 25) / 25) * 0; // 50% -> 50%
+		} else {
+			// 50% 以上: 赤色
+			hue = 0;
+			saturation = 100;
+			lightness = 50;
+		}
+
+		return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 	}
 </script>
 
@@ -180,7 +212,10 @@
 							<td>{oxData.lon[i].toFixed(2)}</td>
 							<td>{oxData.lat[i].toFixed(2)}</td>
 							{#each Array.from({ length: 24 }, (_, j) => j + 1) as hour}
-								<td>
+								<td
+									class:highlight={Math.round(oxData[`+${hour}`][i]) >= 120}
+									style="background-color: {getBackgroundColor(ptable, oxData, hour, i)};"
+								>
 									{Math.round(oxData[`+${hour}`][i])}
 									{#if ptable}
 										<br />
@@ -251,5 +286,9 @@
 		border: 1px solid #ccc;
 		padding: 0.5em;
 		text-align: center;
+	}
+	.highlight {
+		color: green;
+		font-weight: bold;
 	}
 </style>
