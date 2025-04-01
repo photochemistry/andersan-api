@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, Response
 import andersan
 from andersan.sqlitedictcache import sqlitedict_cache
 import andersan.airmonitor
-import predict
+from andersan_core import predict
 import json
 
 
