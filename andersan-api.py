@@ -13,10 +13,13 @@ from fastapi import Depends, FastAPI, Request, status, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import andersan
-from andersan.sqlitedictcache import sqlitedict_cache
 import andersan.airmonitor
 from andersan_core import predict
 import json
+from diskcache import Cache #diskcacheをimportする
+
+# SQLite をストレージとして使用する場合
+cache = Cache("loc", sqlite_file="loc")
 
 
 app = FastAPI()
@@ -230,7 +233,7 @@ def reverse_geocode_geopy(lon, lat):
         return None
 
 
-@sqlitedict_cache("loc")
+@cache.memoize()
 @app.get("/loc/{lon}/{lat}")
 async def location(lon: float, lat: float) -> str:
     """緯度経度を住所などの情報に変換する。
