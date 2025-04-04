@@ -27,9 +27,8 @@ class _SQLiteDictCacheFunctionWrapper(Generic[P, T]):
         self.__expiry_days = expiry_days
         self.__logger = getLogger(__name__)
         self.__logger.debug(f"Initialized cache wrapper for {basename} with expiry_days={expiry_days}")
-        self.__is_async = asyncio.iscoroutinefunction(func)
 
-    async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T:
         logger = self.__logger
         call_args = json.dumps(args + tuple(kwargs.items()))
         logger.debug(f"Function {self.__basename} called with args: {call_args}")
@@ -69,10 +68,7 @@ class _SQLiteDictCacheFunctionWrapper(Generic[P, T]):
                 
                 # キャッシュにないか期限切れの場合、関数を実行
                 logger.debug(f"Executing function {self.__basename}")
-                if self.__is_async:
-                    ret = await self.__wrapped__(*args, **kwargs)
-                else:
-                    ret = self.__wrapped__(*args, **kwargs)
+                ret = self.__wrapped__(*args, **kwargs)
                 if ret is None:
                     logger.info(f"Cache for {self.__basename} prevents storing None.")
                 else:
@@ -86,10 +82,7 @@ class _SQLiteDictCacheFunctionWrapper(Generic[P, T]):
                 return ret
         except Exception as e:
             logger.error(f"Error opening cache file: {cache_file}, {e}")
-            if self.__is_async:
-                return await self.__wrapped__(*args, **kwargs)
-            else:
-                return self.__wrapped__(*args, **kwargs)
+            return self.__wrapped__(*args, **kwargs)
 
 
 def sqlitedict_cache(
@@ -97,12 +90,9 @@ def sqlitedict_cache(
     expiry_days: Optional[float] = 7.0,
 ) -> Callable[[Callable[P, T]], _SQLiteDictCacheFunctionWrapper[P, T]]:
     def decorator(func: Callable[P, T]) -> _SQLiteDictCacheFunctionWrapper[P, T]:
-        logger = getLogger(__name__)
-        logger.debug(f"Creating cache decorator for {basename} with expiry_days={expiry_days}")
         wrapped = _SQLiteDictCacheFunctionWrapper(func, basename, expiry_days)
         wrapped.__doc__ = func.__doc__
         return wrapped
-
     return decorator
 
 
@@ -125,9 +115,10 @@ def cache_if_not_none(func):
     return wrapper
 
 
-@sqlitedict_cache("fib")
+# デコレータを適用する前に、関数を定義
 def fib(n):
     return 1 if n in (0, 1) else fib(n - 1) + fib(n - 2)
+
 
 
 if __name__ == "__main__":

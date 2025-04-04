@@ -241,7 +241,6 @@ def reverse_geocode_geopy(lon, lat):
         return None
 
 
-@sqlitedict_cache(basename="loc")
 @app.get("/loc/{lon}/{lat}")
 async def location(lon: float, lat: float) -> str:
     """緯度経度を住所などの情報に変換する。
@@ -251,7 +250,7 @@ async def location(lon: float, lat: float) -> str:
         lat (float): 緯度
 
     Returns:
-        dict: 住所情報
+        JSON str: 住所情報
             X, Y (int): 地理院タイルのX,Y
             Z (int): 地理院タイルのZoom
             address (str): 指定された地点の住所
@@ -271,6 +270,7 @@ async def location(lon: float, lat: float) -> str:
 
     data = dict(X=int(x), Y=int(y), Z=12, address=address, pref=prefecture)
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
+
 
 
 # @app.get("/oxnow/{model}/{prefecture}")
