@@ -7,16 +7,12 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-keras = "^3.8.0"
-tensorflow = "^2.18.0"
 uvicorn = "^0.34.0"
 fastapi = "^0.115.8"
-sqlitedict = "^2.1.0"
-andersan = {path = "../andersan"}
-geocoder = "^1.38.1"
 geopy = "^2.4.1"
 icecream = "^2.1.4"
 andersan-core = {path = "../andersan-core"}
+andersan = {path = "../andersan"}
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.1.1"

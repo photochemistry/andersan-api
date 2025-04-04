@@ -2,25 +2,33 @@
 
 import datetime
 import os
-from typing import List, Union, Literal
-from logging import getLogger, basicConfig, INFO, DEBUG
+from typing import Literal
+from logging import basicConfig, DEBUG, getLogger
 import pandas as pd
 import numpy as np
 
 import uvicorn
 
-from fastapi import Depends, FastAPI, Request, status, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 import andersan
 import andersan.airmonitor
 from andersan_core import predict
 import json
-from diskcache import Cache #diskcacheをimportする
+# from andersan.sqlitedictcache import sqlitedict_cache
+from sqlitedictcache import sqlitedict_cache
+# ログ設定
+basicConfig(
+    level=DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = getLogger(__name__)
+logger.setLevel(DEBUG)
 
-# SQLite をストレージとして使用する場合
-cache = Cache("loc", sqlite_file="loc")
-
+# sqlitedictのログも有効化
+sqlitedict_logger = getLogger('sqlitedict')
+sqlitedict_logger.setLevel(DEBUG)
 
 app = FastAPI()
 
@@ -229,11 +237,11 @@ def reverse_geocode_geopy(lon, lat):
         else:
             return None
     except Exception as e:
-        print(f"エラーが発生しました: {e}")
+        logger.error(f"ジオコーディングエラー: {e}")
         return None
 
 
-@cache.memoize()
+@sqlitedict_cache(basename="loc")
 @app.get("/loc/{lon}/{lat}")
 async def location(lon: float, lat: float) -> str:
     """緯度経度を住所などの情報に変換する。
@@ -243,13 +251,14 @@ async def location(lon: float, lat: float) -> str:
         lat (float): 緯度
 
     Returns:
-        JSON str: 住所情報
+        dict: 住所情報
             X, Y (int): 地理院タイルのX,Y
             Z (int): 地理院タイルのZoom
             address (str): 指定された地点の住所
             pref (str): 指定された地点の県名(アルファベット表記)
 
     """
+    logger.debug(f"Geocoding location: lon={lon}, lat={lat}")
     x, y = andersan.tile.code(zoom=12, lon=lon, lat=lat)
     address = reverse_geocode_geopy(lon, lat)
 
