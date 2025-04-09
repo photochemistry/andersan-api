@@ -2,11 +2,9 @@
 
 import datetime
 import os
-from typing import Literal
+from typing import Literal, Union
 from logging import basicConfig, DEBUG, getLogger
 import pandas as pd
-import numpy as np
-
 import uvicorn
 
 from fastapi import FastAPI, HTTPException
@@ -16,8 +14,7 @@ import andersan
 import andersan.airmonitor
 from andersan_core import predict
 import json
-# from andersan.sqlitedictcache import sqlitedict_cache
-from sqlitedictcache import sqlitedict_cache
+
 # ログ設定
 basicConfig(
     level=DEBUG,
@@ -32,12 +29,13 @@ sqlitedict_logger.setLevel(DEBUG)
 
 app = FastAPI()
 
+# CORS設定
 origins = [
     "*",
     "http://localhost:8087",
     "http://172.23.78.207:8087",
     "http://192.168.3.234:8087",
-    "http://172.23.78.44:8080", # ここにクライアントのIPを書くの???
+    "http://172.23.78.44:8080",
 ]
 
 app.add_middleware(
@@ -160,14 +158,14 @@ async def tile_data(
 @app.get("/ox/{model}/{prefecture}/{datehour}")
 async def predict_Ox(
     prefecture: Literal[tuple(andersan.Neighbors)],
-    datehour: datetime.datetime,
+    datehour: Union[datetime.datetime, Literal["now"]],
     model: str,
 ):
     """県内のタイル点でのOX予測値を返す。
 
     Args:
     -   prefecture (str): 県名 ["kanagawa"]
-    -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。
+    -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] または "now"。正時にそろえられ、分以下は無視されます。
     -   model (str): 予測モデル。
             "v0":andersan0_1(12th tile, 8 hours ahead.)
             "v0":andersan0_1(12th tile, 8 hours ahead.)
@@ -182,20 +180,15 @@ async def predict_Ox(
     if prefecture not in andersan.Neighbors:
         raise HTTPException(status_code=404, detail="Out of the cover area")
 
-    datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    if datehour == "now":
+        datehour = datetime.datetime.now()
+        datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    else:
+        datehour = datehour.replace(minute=0, second=0, microsecond=0)
     isodate = datetime.datetime.isoformat(datehour)
 
     # prediction function switcher
-    if model == "v0":
-        predict_ox = predict.predict_ox_v0
-    elif model == "v0a":
-        predict_ox = predict.predict_ox_v0a
-    elif model == "v1":
-        predict_ox = predict.predict_ox_v1
-    elif model == "v1a":
-        predict_ox = predict.predict_ox_v1a
-    else:
-        raise InvalidModelException(model)
+    predict_ox = load_model(model)
 
     raw_data = predict_ox(prefecture, isodate)
     # logger.debug(raw_data)
@@ -206,17 +199,18 @@ async def predict_Ox(
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
 
-# 一般ユーザー視線(そしてスマホアプリ)でいえば、県内全体の情報を入手できるより、
-# 現在の座標での値だけ入手できたほうが便利。
-# ただし、現在の県単位の予測はもう崩したくない。
-# なので、簡易IFを作り、/oxの結果に加えて、現在地の情報(県、住所、タイル)を返す。
-# いや、違うな。現在地の換算のためだけのAPIを作る
-
-
 
 from geopy.geocoders import Nominatim
 import time
 
+# ジオコーダーをグローバル変数として保持
+geolocator = None
+
+def get_geolocator():
+    global geolocator
+    if geolocator is None:
+        geolocator = Nominatim(user_agent="andersan")
+    return geolocator
 
 def reverse_geocode_geopy(lon, lat):
     """
@@ -229,7 +223,7 @@ def reverse_geocode_geopy(lon, lat):
     Returns:
         str: 住所 (取得できなかった場合はNone)
     """
-    geolocator = Nominatim(user_agent="andersan")  # ユーザーエージェントを設定
+    geolocator = get_geolocator()
     try:
         location = geolocator.reverse((lat, lon))
         if location:
@@ -273,49 +267,6 @@ async def location(lon: float, lat: float) -> str:
 
 
 
-# @app.get("/oxnow/{model}/{prefecture}")
-# async def predict_Ox_now(
-#     prefecture: Literal[tuple(andersan.Neighbors)],
-#     model: str,
-# ):
-#     """県内のタイル点でのOX予測値を返す。
-
-#     Args:
-#     -   prefecture (str): 県名 ["kanagawa"]
-#     -   model (str): 予測モデル。 "v0":andersan0_1(12th tile, 8 hours ahead.)
-
-#     Returns:
-#     -   _str_: 県内の地理院タイル点でのOxの予測値。
-#     """
-
-#     # logger = getLogger()
-
-#     if prefecture not in andersan.Neighbors:
-#         raise HTTPException(status_code=404, detail="Out of the cover area")
-
-#     isodate = "now"
-
-#     # prediction function switcher
-#     if model == "v0":
-#         predict_ox = predict.predict_ox_v0
-#     elif model == "v0a":
-#         predict_ox = predict.predict_ox_v0a
-#     elif model == "v1":
-#         predict_ox = predict.predict_ox_v1
-#     elif model == "v1a":
-#         predict_ox = predict.predict_ox_v1a
-#     else:
-#         raise InvalidModelException(model)
-
-#     raw_data = predict_ox(prefecture, isodate)
-#     # logger.debug(raw_data)
-
-#     if raw_data is None:
-#         raise HTTPException(status_code=404, detail="Data not available")
-#     data = dictize(raw_data)
-#     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
-
-
 # 次のAPI: 確率換算表を提供する。/pmap/
 @app.get("/ptable/{model}")
 async def probability_table(
@@ -343,23 +294,38 @@ async def probability_table(
     return Response(content=df.to_json(indent=2))
 
 
+def load_model(model_name):
+    if model_name == "v0":
+        predict_ox = predict.predict_ox_v0
+    elif model_name == "v0a":
+        predict_ox = predict.predict_ox_v0a
+    elif model_name == "v1":
+        predict_ox = predict.predict_ox_v1
+    elif model_name == "v1a":
+        predict_ox = predict.predict_ox_v1a
+    else:
+        raise InvalidModelException(model_name)
+    return predict_ox
+
 if __name__ == "__main__":
     import os
-
+    import signal
+    
     # disable GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
+    
     basicConfig(level=DEBUG)
     log_config = uvicorn.config.LOGGING_CONFIG
-    log_config["formatters"]["access"][
-        "fmt"
-    ] = "%(asctime)s - %(levelname)s - %(message)s"
-    log_config["formatters"]["default"][
-        "fmt"
-    ] = "%(asctime)s - %(levelname)s - %(message)s"
+    log_config["formatters"]["access"]["fmt"] = "%(asctime)s - %(levelname)s - %(message)s"
+    log_config["formatters"]["default"]["fmt"] = "%(asctime)s - %(levelname)s - %(message)s"
+    
     uvicorn.run(
         "andersan-api:app",
         host="0.0.0.0",
         port=8087,
-        reload=True,
+        reload=True,  # リロード機能を有効化
+        reload_dirs=["."],  # 現在のディレクトリのみを監視
+        reload_includes=["*.py"],  # Pythonファイルのみを監視
+        reload_excludes=["*.pyc", "*.pyo", "*.pyd", "__pycache__", "*.so"],  # 監視対象から除外
+        reload_delay=1.0,  # 監視間隔を1秒に設定
     )
