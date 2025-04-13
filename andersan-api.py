@@ -86,40 +86,40 @@ class InvalidModelException(Exception):
         super().__init__(self.message)
 
 
-@app.get("/raw/{prefecture}/{datehour}")
-async def raw_data(
-    prefecture: Literal[tuple(andersan.airmonitor.prefecture_retrievers)],
-    datehour: datetime.datetime,
-):
-    """県内の全測定局の実測値を返す。
+# @app.get("/raw/{prefecture}/{datehour}")
+# async def raw_data(
+#     prefecture: Literal[tuple(andersan.airmonitor.prefecture_retrievers)],
+#     datehour: datetime.datetime,
+# ):
+#     """県内の全測定局の実測値を返す。
 
-    Args:
-    -   prefecture (str): 県名 ["kanagawa"]
-    -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。
+#     Args:
+#     -   prefecture (str): 県名 ["kanagawa"]
+#     -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。
 
-    Returns:
-    -   _str_: 県提供の大気監視データ
-    """
-    start_time = time.time()
+#     Returns:
+#     -   _str_: 県提供の大気監視データ
+#     """
+#     start_time = time.time()
     
-    if prefecture not in andersan.airmonitor.prefecture_retrievers:
-        raise HTTPException(status_code=404, detail="Out of the cover area")
+#     if prefecture not in andersan.airmonitor.prefecture_retrievers:
+#         raise HTTPException(status_code=404, detail="Out of the cover area")
     
-    datehour = datehour.replace(minute=0, second=0, microsecond=0)
-    isodate = datetime.datetime.isoformat(datehour)
-    try:
-        raw_data = andersan.airmonitor.prefecture_retrievers[prefecture].retrieve(
-            isodate, station_set="air"
-        )
-    except:
-        raise HTTPException(status_code=404, detail="Data not available.")
+#     datehour = datehour.replace(minute=0, second=0, microsecond=0)
+#     isodate = datetime.datetime.isoformat(datehour)
+#     try:
+#         raw_data = andersan.airmonitor.prefecture_retrievers[prefecture].retrieve(
+#             isodate, station_set="air"
+#         )
+#     except:
+#         raise HTTPException(status_code=404, detail="Data not available.")
 
-    dict_data = dict(data=raw_data.to_dict(), spec={})
+#     dict_data = dict(data=raw_data.to_dict(), spec={})
     
-    process_time = time.time() - start_time
-    logger.debug(f"raw_data internal processing time: {process_time:.3f} seconds")
+#     process_time = time.time() - start_time
+#     logger.debug(f"raw_data internal processing time: {process_time:.3f} seconds")
     
-    return Response(content=json.dumps(dict_data, indent=2, ensure_ascii=False))
+#     return Response(content=json.dumps(dict_data, indent=2, ensure_ascii=False))
 
 
 def dictize(df, items=[]):
@@ -355,6 +355,10 @@ if __name__ == "__main__":
     log_config = uvicorn.config.LOGGING_CONFIG
     log_config["formatters"]["access"]["fmt"] = "%(asctime)s - %(levelname)s - %(message)s"
     log_config["formatters"]["default"]["fmt"] = "%(asctime)s - %(levelname)s - %(message)s"
+# sqlitedictのログも有効化
+    sqlitedict_logger = getLogger('sqlitedict')
+    sqlitedict_logger.setLevel(DEBUG)
+
     
     uvicorn.run(
         "andersan-api:app",
