@@ -12,7 +12,6 @@ fastapi = "^0.115.8"
 geopy = "^2.4.1"
 icecream = "^2.1.4"
 andersan-core = {path = "../andersan-core"}
-andersan = {path = "../andersan"}
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.1.1"
