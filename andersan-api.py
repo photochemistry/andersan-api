@@ -6,8 +6,10 @@ from typing import Literal, Union
 from logging import basicConfig, DEBUG, getLogger
 import pandas as pd
 import uvicorn
+import time
+import pytz
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import andersan
@@ -28,6 +30,15 @@ sqlitedict_logger = getLogger('sqlitedict')
 sqlitedict_logger.setLevel(DEBUG)
 
 app = FastAPI()
+
+# 処理時間計測用のミドルウェア
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    logger.debug(f"Processing time: {request.url.path} - {process_time:.3f} seconds")
+    return response
 
 # CORS設定
 origins = [
@@ -89,10 +100,11 @@ async def raw_data(
     Returns:
     -   _str_: 県提供の大気監視データ
     """
+    start_time = time.time()
+    
     if prefecture not in andersan.airmonitor.prefecture_retrievers:
         raise HTTPException(status_code=404, detail="Out of the cover area")
-    # もうちょっと補助情報も出さないと使えないよ。
-    # APIを叩く側はJSなので、JSONにしておくほうが便利。
+    
     datehour = datehour.replace(minute=0, second=0, microsecond=0)
     isodate = datetime.datetime.isoformat(datehour)
     try:
@@ -103,6 +115,10 @@ async def raw_data(
         raise HTTPException(status_code=404, detail="Data not available.")
 
     dict_data = dict(data=raw_data.to_dict(), spec={})
+    
+    process_time = time.time() - start_time
+    logger.debug(f"raw_data internal processing time: {process_time:.3f} seconds")
+    
     return Response(content=json.dumps(dict_data, indent=2, ensure_ascii=False))
 
 
@@ -141,17 +157,22 @@ async def tile_data(
     Returns:
     -   _str_: 実測値
     """
+    start_time = time.time()
+    
     if prefecture not in andersan.Neighbors:
         raise HTTPException(status_code=404, detail="Out of the cover area")
-    # もうちょっと補助情報も出さないと使えないよ。
-    # APIを叩く側はJSなので、JSONにしておくほうが便利。
+    
     datehour = datehour.replace(minute=0, second=0, microsecond=0)
     isodate = datetime.datetime.isoformat(datehour)
     raw_data = andersan.airmonitor.tiles(prefecture, isodate, zoom, items=ITEMS)
     if raw_data is None:
         raise HTTPException(status_code=404, detail="Data not available")
-    # 付加情報を添える。単位なども必要。
+    
     data = dictize(raw_data, items=ITEMS)
+    
+    process_time = time.time() - start_time
+    logger.debug(f"tile_data internal processing time: {process_time:.3f} seconds")
+    
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
 
@@ -174,28 +195,38 @@ async def predict_Ox(
     Returns:
     -   _str_: 県内の地理院タイル点でのOxの予測値。
     """
-
-    # logger = getLogger()
+    start_time = time.time()
 
     if prefecture not in andersan.Neighbors:
         raise HTTPException(status_code=404, detail="Out of the cover area")
 
     if datehour == "now":
-        datehour = datetime.datetime.now()
+        datehour = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
         datehour = datehour.replace(minute=0, second=0, microsecond=0)
     else:
         datehour = datehour.replace(minute=0, second=0, microsecond=0)
-    isodate = datetime.datetime.isoformat(datehour)
+    try:
+        isodate = datetime.datetime.isoformat(datehour)
+        logger.debug(f"Using datetime: {datehour} (tzinfo: {datehour.tzinfo})")
+    except Exception as e:
+        logger.error(f"Error processing datetime: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing datetime: {e}")
 
     # prediction function switcher
     predict_ox = load_model(model)
 
-    raw_data = predict_ox(prefecture, isodate)
-    # logger.debug(raw_data)
-
-    if raw_data is None:
-        raise HTTPException(status_code=404, detail="Data not available")
+    try:
+        raw_data = predict_ox(prefecture, isodate)
+        if raw_data is None:
+            raise HTTPException(status_code=404, detail="Data not available")
+    except Exception as e:
+        logger.error(f"Error in prediction: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in prediction: {e}")
+    
     data = dictize(raw_data)
+    process_time = time.time() - start_time
+    logger.debug(f"predict_Ox internal processing time: {process_time:.3f} seconds")
+    
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
 
@@ -251,11 +282,13 @@ async def location(lon: float, lat: float) -> str:
             pref (str): 指定された地点の県名(アルファベット表記)
 
     """
+    start_time = time.time()
+    
     logger.debug(f"Geocoding location: lon={lon}, lat={lat}")
     x, y = andersan.tile.code(zoom=12, lon=lon, lat=lat)
     address = reverse_geocode_geopy(lon, lat)
 
-    # タイルを含む県を返す。(神奈川の辺境のように、タイルに含まれていない場所もある)
+    # Return the prefecture containing the tile. (Some areas like the outskirts of Kanagawa may not be included in the tile)
     prefecture = None
     for pref, ra in andersan.prefecture_ranges.items():
         if ra[0][0] <= lon < ra[1][0] and ra[0][1] <= lat < ra[1][1]:
@@ -263,6 +296,10 @@ async def location(lon: float, lat: float) -> str:
             break
 
     data = dict(X=int(x), Y=int(y), Z=12, address=address, pref=prefecture)
+    
+    process_time = time.time() - start_time
+    logger.debug(f"location internal processing time: {process_time:.3f} seconds")
+    
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
 
