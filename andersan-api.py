@@ -3,7 +3,7 @@
 import datetime
 import os
 from typing import Literal, Union
-from logging import basicConfig, DEBUG, getLogger
+from logging import basicConfig, getLogger, INFO
 import pandas as pd
 import uvicorn
 import time
@@ -19,15 +19,15 @@ import json
 
 # ログ設定
 basicConfig(
-    level=DEBUG,
+    level=INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = getLogger(__name__)
-logger.setLevel(DEBUG)
+logger.setLevel(INFO)
 
 # sqlitedictのログも有効化
 sqlitedict_logger = getLogger('sqlitedict')
-sqlitedict_logger.setLevel(DEBUG)
+sqlitedict_logger.setLevel(INFO)
 
 app = FastAPI()
 
@@ -351,13 +351,13 @@ if __name__ == "__main__":
     # disable GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     
-    basicConfig(level=DEBUG)
+    basicConfig(level=INFO)
     log_config = uvicorn.config.LOGGING_CONFIG
     log_config["formatters"]["access"]["fmt"] = "%(asctime)s - %(levelname)s - %(message)s"
     log_config["formatters"]["default"]["fmt"] = "%(asctime)s - %(levelname)s - %(message)s"
 # sqlitedictのログも有効化
     sqlitedict_logger = getLogger('sqlitedict')
-    sqlitedict_logger.setLevel(DEBUG)
+    sqlitedict_logger.setLevel(INFO)
 
     
     uvicorn.run(

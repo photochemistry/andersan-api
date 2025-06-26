@@ -11,8 +11,6 @@ uvicorn = "^0.34.0"
 fastapi = "^0.115.8"
 geopy = "^2.4.1"
 icecream = "^2.1.4"
-andersan-core = {path = "../andersan-core"}
-andersan = {path = "../andersan"}
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.1.1"
@@ -25,6 +23,13 @@ retry-requests = "^2.0.0"
 delaunayextrapolation = "^0.3"
 pyarrow = "^19.0.1"
 tqdm = "^4.67.1"
+
+
+[tool.poetry.group.debug.dependencies]
+keras = "^3.10.0"
+tensorflow = "^2.19.0"
+airpollutionwatch = "^0.1.5"
+sqlitedict = "^2.1.0"
 
 [tool.isort]
 multi_line_output = 3
