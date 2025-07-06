@@ -123,6 +123,7 @@ class InvalidModelException(Exception):
 
 
 def dictize(df, items=[]):
+    # itemsはspecのために指定するだけで、dataの中身はitemsに依存しない。
     spec = ITEMSPECS.copy()
     loc = ("X", "Y", "lon", "lat", "Z")
     for col in loc:
@@ -176,6 +177,61 @@ async def tile_data(
     return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
 
 
+@app.get("/obs/{item}/{prefecture}/{datehour}")
+async def observed_item(
+    item: Literal[tuple(ITEMS)],
+    prefecture: Literal[tuple(andersan.Neighbors)],
+    datehour: datetime.datetime,
+):
+    """県内のタイル点での実測値を返す。Zoomは12固定。
+
+    Args:
+    -   item (str): 実測値の種類 ["NMHC", "OX", "NOX", "TEMP", "WX", "WY"]
+    -   prefecture (str): 県名 ["kanagawa"]
+    -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] 正時にそろえられ、分以下は無視されます。
+
+    Returns:
+    -   _str_: 実測値
+    """
+    start_time = time.time()
+    
+    if prefecture not in andersan.Neighbors:
+        raise HTTPException(status_code=404, detail="Out of the cover area")
+    
+    datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    data = dict()
+    data["data"] = dict()
+    for hour in range(-23, 1):
+        isodate = datetime.datetime.isoformat(datehour + datetime.timedelta(hours=hour))
+        # raw_data = andersan.airmonitor.tiles(prefecture, isodate, zoom=12, items=(item,))
+
+        # 全itemを取得する必要はない。これはデバッグのため。
+        raw_data = andersan.airmonitor.tiles(prefecture, isodate, zoom=12)
+        # print(f"prefecture: {prefecture}, isodate: {isodate}")
+        if raw_data is None:
+            raise HTTPException(status_code=404, detail="Data not available")
+        data1 = dictize(raw_data, items=(item,))
+        if hour == 0:
+            data["spec"] = data1["spec"]
+            data["data"]["XY"] = raw_data[["X", "Y"]].to_numpy().tolist()
+            data["data"]["lon"] = raw_data["lon"].tolist()
+            data["data"]["lat"] = raw_data["lat"].tolist()
+        data["data"][hour] = data1["data"][item]
+        
+    
+    
+    process_time = time.time() - start_time
+    logger.debug(f"tile_data internal processing time: {process_time:.3f} seconds")
+
+    # replace NaNs for JSON compliance.
+    for hour in range(-23, 1):
+        data["data"][hour] = [float(x) if pd.notna(x) else None for x in data["data"][hour]]
+    return data
+    # print(data)
+    # return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
+
+
+
 @app.get("/ox/{model}/{prefecture}/{datehour}")
 async def predict_Ox(
     prefecture: Literal[tuple(andersan.Neighbors)],
@@ -224,6 +280,7 @@ async def predict_Ox(
         raise HTTPException(status_code=500, detail=f"Error in prediction: {e}")
     
     data = dictize(raw_data)
+    data["spec"]["items"] = ["OX"]
     process_time = time.time() - start_time
     logger.debug(f"predict_Ox internal processing time: {process_time:.3f} seconds")
     
@@ -232,6 +289,7 @@ async def predict_Ox(
 
 
 from geopy.geocoders import Nominatim
+from functools import lru_cache
 import time
 
 # ジオコーダーをグローバル変数として保持
@@ -243,6 +301,7 @@ def get_geolocator():
         geolocator = Nominatim(user_agent="andersan")
     return geolocator
 
+@lru_cache(maxsize=1000)
 def reverse_geocode_geopy(lon, lat):
     """
     緯度経度から住所を逆ジオコーディングする関数
@@ -286,6 +345,9 @@ async def location(lon: float, lat: float) -> str:
     
     logger.debug(f"Geocoding location: lon={lon}, lat={lat}")
     x, y = andersan.tile.code(zoom=12, lon=lon, lat=lat)
+    # わざと精度を落す。これにより、キャッシュが効く。
+    lon = round(lon, 3)
+    lat = round(lat, 3)
     address = reverse_geocode_geopy(lon, lat)
 
     # Return the prefecture containing the tile. (Some areas like the outskirts of Kanagawa may not be included in the tile)

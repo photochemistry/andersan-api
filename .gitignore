@@ -171,3 +171,13 @@ api_keys.toml
 *.val
 cache.*
 
+amedas*.json
+
+# aux modules
+andersan/
+andersan_core/
+
+AIの試行錯誤/
+old_samples.txt
+old_samples.json
+new_samples.txt
