@@ -75,9 +75,9 @@ def forward_ssh_port(ssh_host, ssh_port, ssh_user, remote_port, local_port):
         logger.error(f"Error occurred: {e}")
 
 if __name__ == "__main__":
-    ssh_host = "andersan.riis.okayama-u.ac.jp"
+    ssh_host = "andersan.net"
     ssh_port = 22
-    ssh_user = "andersan"
+    ssh_user = "ubuntu"
     remote_port = 8087
     local_port = 8087
 
