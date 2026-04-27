@@ -1,11 +1,14 @@
 # 大幅にandersan/をリファクタリングしたので、調整が必要。
 
+import asyncio
 import datetime
 import os
 import argparse
 from pathlib import Path
 from typing import Literal, Union
-from logging import basicConfig, getLogger, INFO, DEBUG
+import re
+from logging import basicConfig, getLogger, INFO, DEBUG, WARNING, StreamHandler
+from logging.handlers import RotatingFileHandler
 import pandas as pd
 import uvicorn
 import time
@@ -16,17 +19,57 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import andersan
 import andersan.airmonitor
+from andersan.sqlitedictcache import sqlitedict_cache
 from andersan_core import predict
 import json
 
 # ログ設定
 DEFAULT_LOG_LEVEL_NAME = os.getenv("ANDERSAN_LOG_LEVEL", "INFO").upper()
 DEFAULT_LOG_LEVEL = DEBUG if DEFAULT_LOG_LEVEL_NAME == "DEBUG" else INFO
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+LOG_FILE = LOG_DIR / "andersan-api.log"
 
-basicConfig(
-    level=DEFAULT_LOG_LEVEL,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+# requests_cache / urllib3 は DEBUG だと1回の HTTP で数十行出し、ログI/Oだけで体感が遅くなる。
+_NOISY_LOGGER_NAMES = (
+    "requests_cache",
+    "requests_cache.policy",
+    "requests_cache.policy.actions",
+    "requests_cache.backends",
+    "requests_cache.backends.base",
+    "requests_cache.backends.sqlite",
+    "urllib3",
+    "urllib3.connectionpool",
+    "http.client",
 )
+
+
+def _silence_noisy_third_party_loggers() -> None:
+    for name in _NOISY_LOGGER_NAMES:
+        getLogger(name).setLevel(WARNING)
+    # grid 取得の DEBUG は /obs の24ループで行数が嵩む
+    getLogger("andersan.airmonitor").setLevel(INFO)
+
+
+def setup_logging(log_level=DEFAULT_LOG_LEVEL):
+    """コンソールとローカルファイルへログを出力する。"""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    stream_handler = StreamHandler()
+    basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[stream_handler, file_handler],
+        force=True,
+    )
+    _silence_noisy_third_party_loggers()
+
+
+setup_logging(DEFAULT_LOG_LEVEL)
 logger = getLogger(__name__)
 logger.setLevel(DEFAULT_LOG_LEVEL)
 
@@ -42,7 +85,19 @@ async def add_process_time_header(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
-    logger.debug(f"Processing time: {request.url.path} - {process_time:.3f} seconds")
+    client = request.headers.get("x-andersan-client") or "-"
+    ua = (request.headers.get("user-agent") or "")[:100]
+    path = request.url.path
+    if request.url.query:
+        path = f"{path}?{request.url.query}"
+    logger.info(
+        "HTTP client=%s method=%s path=%s %.3fs ua=%r",
+        client,
+        request.method,
+        path,
+        process_time,
+        ua,
+    )
     return response
 
 
@@ -71,6 +126,9 @@ API_TILES_MAX_RETRIES = 1
 
 # 確率換算表（*.table.feather）。学習側から `tables/` にコピーして運用する。
 PTABLE_DIR = Path(__file__).resolve().parent / "tables"
+DOCS_DIR = Path(__file__).resolve().parent / "docs"
+UI_API_CONTRACT_MD = DOCS_DIR / "api-contract-for-ui.md"
+UI_API_CONTRACT_JSON = DOCS_DIR / "api-contract-for-ui.json"
 
 ITEMSPECS = {
     "NMHC": {"desc": "Non-methane hydrocarbons", "unit": "10ppbC", "range": [0, 100]},
@@ -96,6 +154,10 @@ class InvalidModelException(Exception):
     def __init__(self, model):
         self.message = f"Model '{model}' is not available."
         super().__init__(self.message)
+
+
+class PredictNoDataError(Exception):
+    """予測データが無い場合（SQLite キャッシュには保存しない）。"""
 
 
 # @app.get("/raw/{prefecture}/{datehour}")
@@ -154,6 +216,80 @@ def dictize(df, items=[]):
     return dict(spec=spec, data=data)
 
 
+def build_meta(source_time: datetime.datetime) -> dict:
+    """レスポンス共通メタデータを作る。"""
+    jst = pytz.timezone("Asia/Tokyo")
+    now_jst = datetime.datetime.now(jst)
+    return {
+        "cached_at": datetime.datetime.isoformat(now_jst),
+        "source_time": datetime.datetime.isoformat(source_time),
+    }
+
+
+def _cdf_from_q10_q50_q90(y: float, q10: float, q50: float, q90: float) -> float:
+    """q10/q50/q90 から単調な区分線形 CDF を近似する。"""
+    eps = 1e-6
+    q10, q50, q90 = sorted((float(q10), float(q50), float(q90)))
+    s1 = 0.4 / max(q50 - q10, eps)
+    s2 = 0.4 / max(q90 - q50, eps)
+
+    if y <= q10:
+        cdf = 0.1 - s1 * (q10 - y)
+    elif y <= q50:
+        cdf = 0.1 + s1 * (y - q10)
+    elif y <= q90:
+        cdf = 0.5 + s2 * (y - q50)
+    else:
+        cdf = 0.9 + s2 * (y - q90)
+    return max(0.0, min(1.0, cdf))
+
+
+def _exceedance_prob_from_q10_q50_q90(
+    q10_series: pd.Series, q50_series: pd.Series, q90_series: pd.Series, threshold: float
+) -> list[float]:
+    probs = []
+    for q10, q50, q90 in zip(q10_series, q50_series, q90_series):
+        if pd.isna(q10) or pd.isna(q50) or pd.isna(q90):
+            probs.append(None)
+            continue
+        cdf = _cdf_from_q10_q50_q90(float(threshold), q10, q50, q90)
+        probs.append(1.0 - cdf)
+    return probs
+
+
+def _load_probability_table(model: str) -> pd.DataFrame:
+    if model not in _PTABLE_STEM:
+        raise InvalidModelException(model)
+    stem = _PTABLE_STEM[model]
+    table_path = PTABLE_DIR / f"{stem}.table.feather"
+    if not table_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"確率換算表がありません: {table_path.name} を {PTABLE_DIR} に置いてください。"
+            ),
+        )
+    return pd.read_feather(table_path)
+
+
+def _lookup_exceedance_prob_from_table(
+    table: pd.DataFrame, pred_value: float, hour: int, threshold: int = 120
+) -> float | None:
+    if pd.isna(pred_value):
+        return None
+    bin_value = int(float(pred_value) // 5 * 5)
+    bin_value = max(0, min(145, bin_value))
+    row = table[(table["hours"] == hour) & (table["bin"] == bin_value)]
+    if row.empty:
+        return None
+
+    col = str(threshold) if str(threshold) in row.columns else threshold
+    if col not in row.columns:
+        return None
+    value = row.iloc[0][col]
+    return float(value) if pd.notna(value) else None
+
+
 @app.get("/tile/{zoom}/{prefecture}/{datehour}")
 async def tile_data(
     prefecture: Literal[tuple(andersan.Neighbors)],
@@ -184,6 +320,7 @@ async def tile_data(
         raise HTTPException(status_code=404, detail="Data not available")
 
     data = dictize(raw_data, items=ITEMS)
+    data["meta"] = build_meta(datehour)
 
     process_time = time.time() - start_time
     logger.debug(f"tile_data internal processing time: {process_time:.3f} seconds")
@@ -214,14 +351,16 @@ async def observed_item(
 
     datehour = datehour.replace(minute=0, second=0, microsecond=0)
     data = dict()
+    data["meta"] = build_meta(datehour)
     data["data"] = dict()
     for hour in range(-23, 1):
         isodate = datetime.datetime.isoformat(datehour + datetime.timedelta(hours=hour))
-        # raw_data = andersan.airmonitor.tiles(prefecture, isodate, zoom=12, items=(item,))
-
-        # 全itemを取得する必要はない。これはデバッグのため。
         raw_data = andersan.airmonitor.tiles(
-            prefecture, isodate, zoom=12, max_retries=API_TILES_MAX_RETRIES
+            prefecture,
+            isodate,
+            zoom=12,
+            items=(item,),
+            max_retries=API_TILES_MAX_RETRIES,
         )
         # print(f"prefecture: {prefecture}, isodate: {isodate}")
         if raw_data is None:
@@ -245,67 +384,6 @@ async def observed_item(
     return data
     # print(data)
     # return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
-
-
-@app.get("/ox/{model}/{prefecture}/{datehour}")
-async def predict_Ox(
-    prefecture: Literal[tuple(andersan.Neighbors)],
-    datehour: Union[datetime.datetime, Literal["now"]],
-    model: str,
-):
-    """県内のタイル点でのOX予測値を返す。
-
-    Args:
-    -   prefecture (str): 県名 ["kanagawa"]
-    -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] または "now"。正時にそろえられ、分以下は無視されます。
-    -   model (str): 予測モデル（例: v0, v0a, v1, v1a, a1）。`a1` は andersan1（直接回帰・24h先まで）。
-
-    Returns:
-    -   _str_: 県内の地理院タイル点でのOxの予測値。
-    """
-    start_time = time.time()
-
-    if prefecture not in andersan.Neighbors:
-        raise HTTPException(status_code=404, detail="Out of the cover area")
-
-    if datehour == "now":
-        datehour = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
-        datehour = datehour.replace(minute=0, second=0, microsecond=0)
-    else:
-        datehour = datehour.replace(minute=0, second=0, microsecond=0)
-    try:
-        isodate = datetime.datetime.isoformat(datehour)
-        logger.debug(f"Using datetime: {datehour} (tzinfo: {datehour.tzinfo})")
-    except Exception as e:
-        logger.error(f"Error processing datetime: {e}")
-        raise HTTPException(status_code=500, detail=f"Error processing datetime: {e}")
-
-    # prediction function switcher
-    predict_ox = load_model(model)
-
-    try:
-        raw_data = predict_ox(prefecture, isodate)
-        if raw_data is None:
-            raise HTTPException(status_code=404, detail="Data not available")
-    except Exception as e:
-        logger.exception(f"Error in prediction: {e}")
-        raise HTTPException(status_code=500, detail=f"Error in prediction: {e}")
-
-    data = dictize(raw_data)
-    data["spec"]["items"] = ["OX"]
-    process_time = time.time() - start_time
-    logger.debug(f"predict_Ox internal processing time: {process_time:.3f} seconds")
-
-    return Response(content=json.dumps(data, indent=2, ensure_ascii=False))
-
-
-@app.get("/a1/{prefecture}/{datehour}")
-async def predict_Ox_a1_route(
-    prefecture: Literal[tuple(andersan.Neighbors)],
-    datehour: Union[datetime.datetime, Literal["now"]],
-):
-    """andersan1（直接数値予測）。`/ox/a1/{prefecture}/{datehour}` と同じ応答。"""
-    return await predict_Ox(prefecture=prefecture, datehour=datehour, model="a1")
 
 
 from geopy.geocoders import Nominatim
@@ -421,6 +499,38 @@ async def probability_table(
     return Response(content=df.to_json(indent=2))
 
 
+@app.get("/contract/ui")
+async def ui_api_contract():
+    """UI/AI向け固定API仕様を返す（JSON）。"""
+    if not UI_API_CONTRACT_JSON.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"仕様ファイルがありません: {UI_API_CONTRACT_JSON.name} を {DOCS_DIR} に置いてください。"
+            ),
+        )
+    return Response(
+        content=UI_API_CONTRACT_JSON.read_text(encoding="utf-8"),
+        media_type="application/json",
+    )
+
+
+@app.get("/contract/ui.md")
+async def ui_api_contract_markdown():
+    """UI/AI向け固定API仕様を返す（Markdown）。"""
+    if not UI_API_CONTRACT_MD.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"仕様ファイルがありません: {UI_API_CONTRACT_MD.name} を {DOCS_DIR} に置いてください。"
+            ),
+        )
+    return Response(
+        content=UI_API_CONTRACT_MD.read_text(encoding="utf-8"),
+        media_type="text/markdown; charset=utf-8",
+    )
+
+
 def load_model(model_name):
     if model_name == "v0":
         runner = predict.predict_ox_v0
@@ -441,6 +551,240 @@ def load_model(model_name):
         )
 
     return predict_ox
+
+
+@sqlitedict_cache("api_predict_ox")
+def _predict_ox_payload_sync(model: str, prefecture: str, isodate: str) -> dict:
+    """予測結果の dict（meta 含む）を組み立てる。SQLite キャッシュの単位。"""
+    predict_ox = load_model(model)
+    raw_data = predict_ox(prefecture, isodate)
+    if raw_data is None:
+        raise PredictNoDataError()
+    source_dt = datetime.datetime.fromisoformat(isodate)
+    data = dictize(raw_data)
+    data["spec"]["items"] = ["OX"]
+    data["meta"] = build_meta(source_dt)
+    return data
+
+
+@app.get("/ox/{model}/{prefecture}/{datehour}")
+async def predict_Ox(
+    prefecture: Literal[tuple(andersan.Neighbors)],
+    datehour: Union[datetime.datetime, Literal["now"]],
+    model: str,
+):
+    """県内のタイル点でのOX予測値を返す。
+
+    Args:
+    -   prefecture (str): 県名 ["kanagawa"]
+    -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] または "now"。正時にそろえられ、分以下は無視されます。
+    -   model (str): 予測モデル（例: v0, v0a, v1, v1a, a1）。`a1` は andersan1（直接回帰・24h先まで）。
+
+    Returns:
+    -   _str_: 県内の地理院タイル点でのOxの予測値。
+    """
+    start_time = time.time()
+
+    if prefecture not in andersan.Neighbors:
+        raise HTTPException(status_code=404, detail="Out of the cover area")
+
+    if datehour == "now":
+        datehour = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+        datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    else:
+        datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    try:
+        isodate = datetime.datetime.isoformat(datehour)
+        logger.debug(f"Using datetime: {datehour} (tzinfo: {datehour.tzinfo})")
+    except Exception as e:
+        logger.error(f"Error processing datetime: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing datetime: {e}")
+
+    try:
+        payload = await asyncio.to_thread(
+            _predict_ox_payload_sync, model, prefecture, isodate
+        )
+    except PredictNoDataError:
+        raise HTTPException(status_code=404, detail="Data not available")
+    except InvalidModelException as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    except Exception as e:
+        logger.exception(f"Error in prediction: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in prediction: {e}")
+
+    process_time = time.time() - start_time
+    logger.debug(f"predict_Ox internal processing time: {process_time:.3f} seconds")
+
+    return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+@app.get("/a1/{prefecture}/{datehour}")
+async def predict_Ox_a1_route(
+    prefecture: Literal[tuple(andersan.Neighbors)],
+    datehour: Union[datetime.datetime, Literal["now"]],
+):
+    """andersan1（直接数値予測）。`/ox/a1/{prefecture}/{datehour}` と同じ応答。"""
+    return await predict_Ox(prefecture=prefecture, datehour=datehour, model="a1")
+
+
+@sqlitedict_cache("api_predict_oxq_a4_1")
+def _predict_oxq_a4_1_payload_sync(prefecture: str, isodate: str) -> dict:
+    """andersan4_1（分位点回帰）の予測結果を返す。"""
+    raw_data = predict.predict_oxq_a4_1(
+        prefecture, isodate, tiles_max_retries=API_TILES_MAX_RETRIES
+    )
+    if raw_data is None:
+        raise PredictNoDataError()
+    source_dt = datetime.datetime.fromisoformat(isodate)
+    data = dictize(raw_data)
+    data["spec"]["items"] = [
+        f"+{h}_q10" for h in range(1, 25)
+    ] + [f"+{h}_q50" for h in range(1, 25)] + [f"+{h}_q90" for h in range(1, 25)]
+    data["meta"] = build_meta(source_dt)
+    return data
+
+
+@app.get("/oxq/a4_1/{prefecture}/{datehour}")
+async def predict_Ox_quantile_a4_1(
+    prefecture: Literal[tuple(andersan.Neighbors)],
+    datehour: Union[datetime.datetime, Literal["now"]],
+):
+    """andersan4_1（分位点回帰）を返す。+1..+24 時間先の q10/q50/q90 を含む。"""
+    if prefecture not in andersan.Neighbors:
+        raise HTTPException(status_code=404, detail="Out of the cover area")
+
+    if datehour == "now":
+        datehour = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+    datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    isodate = datetime.datetime.isoformat(datehour)
+    try:
+        payload = await asyncio.to_thread(
+            _predict_oxq_a4_1_payload_sync, prefecture, isodate
+        )
+    except PredictNoDataError:
+        raise HTTPException(status_code=404, detail="Data not available")
+    except Exception as e:
+        logger.exception(f"Error in quantile prediction: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in quantile prediction: {e}")
+
+    return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+@sqlitedict_cache("api_predict_oxq_a4_1_pgt120")
+def _predict_oxq_a4_1_pgt120_payload_sync(prefecture: str, isodate: str) -> dict:
+    """andersan4_1 の q10/q50/q90 から 120ppb 超過確率を返す。"""
+    raw_data = predict.predict_oxq_a4_1(
+        prefecture, isodate, tiles_max_retries=API_TILES_MAX_RETRIES
+    )
+    if raw_data is None:
+        raise PredictNoDataError()
+
+    result = raw_data[["X", "Y", "lon", "lat", "Z"]].copy()
+    threshold = 120.0
+    for h in range(1, 25):
+        p = _exceedance_prob_from_q10_q50_q90(
+            raw_data[f"+{h}_q10"],
+            raw_data[f"+{h}_q50"],
+            raw_data[f"+{h}_q90"],
+            threshold=threshold,
+        )
+        result[f"+{h}_p_gt_120"] = p
+
+    source_dt = datetime.datetime.fromisoformat(isodate)
+    data = dictize(result)
+    data["spec"]["items"] = [f"+{h}_p_gt_120" for h in range(1, 25)]
+    data["meta"] = build_meta(source_dt)
+    return data
+
+
+@sqlitedict_cache("api_predict_ox_pgt120")
+def _predict_ox_pgt120_payload_sync(model: str, prefecture: str, isodate: str) -> dict:
+    """通常回帰モデルの予測値を、確率換算表で P(OX>120) に変換する。"""
+    predict_ox = load_model(model)
+    raw_data = predict_ox(prefecture, isodate)
+    if raw_data is None:
+        raise PredictNoDataError()
+
+    table = _load_probability_table(model)
+    result = raw_data[["X", "Y", "lon", "lat", "Z"]].copy()
+    hour_cols = []
+    for col in raw_data.columns:
+        m = re.fullmatch(r"\+(\d+)", str(col))
+        if m:
+            hour_cols.append((int(m.group(1)), col))
+    hour_cols.sort(key=lambda x: x[0])
+
+    for h, pred_col in hour_cols:
+        probs = [
+            _lookup_exceedance_prob_from_table(table, pred_value, hour=h, threshold=120)
+            for pred_value in raw_data[pred_col]
+        ]
+        result[f"+{h}_p_gt_120"] = probs
+
+    source_dt = datetime.datetime.fromisoformat(isodate)
+    data = dictize(result)
+    data["spec"]["items"] = [f"+{h}_p_gt_120" for h, _ in hour_cols]
+    data["meta"] = build_meta(source_dt)
+    return data
+
+
+@app.get("/oxq/a4_1/pgt120/{prefecture}/{datehour}")
+async def predict_Ox_quantile_a4_1_pgt120(
+    prefecture: Literal[tuple(andersan.Neighbors)],
+    datehour: Union[datetime.datetime, Literal["now"]],
+):
+    """andersan4_1 の予測から OX が 120ppb を超える確率を返す。"""
+    if prefecture not in andersan.Neighbors:
+        raise HTTPException(status_code=404, detail="Out of the cover area")
+
+    if datehour == "now":
+        datehour = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+    datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    isodate = datetime.datetime.isoformat(datehour)
+    try:
+        payload = await asyncio.to_thread(
+            _predict_oxq_a4_1_pgt120_payload_sync, prefecture, isodate
+        )
+    except PredictNoDataError:
+        raise HTTPException(status_code=404, detail="Data not available")
+    except Exception as e:
+        logger.exception(f"Error in exceedance prediction: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in exceedance prediction: {e}")
+
+    return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+@app.get("/ox/{model}/pgt120/{prefecture}/{datehour}")
+async def predict_Ox_pgt120(
+    model: str,
+    prefecture: Literal[tuple(andersan.Neighbors)],
+    datehour: Union[datetime.datetime, Literal["now"]],
+):
+    """通常回帰モデル（v0/v0a/v1/v1a/a1）の 120ppb 超過確率を返す。"""
+    if prefecture not in andersan.Neighbors:
+        raise HTTPException(status_code=404, detail="Out of the cover area")
+    if model not in _PTABLE_STEM:
+        raise HTTPException(status_code=400, detail=f"Model '{model}' is not available.")
+
+    if datehour == "now":
+        datehour = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+    datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    isodate = datetime.datetime.isoformat(datehour)
+    try:
+        payload = await asyncio.to_thread(
+            _predict_ox_pgt120_payload_sync, model, prefecture, isodate
+        )
+    except PredictNoDataError:
+        raise HTTPException(status_code=404, detail="Data not available")
+    except InvalidModelException as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    except Exception as e:
+        logger.exception(f"Error in exceedance prediction from table: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error in exceedance prediction from table: {e}"
+        )
+
+    return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
@@ -470,7 +814,7 @@ if __name__ == "__main__":
     # disable GPU
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-    basicConfig(level=log_level)
+    setup_logging(log_level)
     logger.setLevel(log_level)
     log_config = uvicorn.config.LOGGING_CONFIG
     log_config["formatters"]["access"][
