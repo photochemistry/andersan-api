@@ -17,6 +17,7 @@ import pytz
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 import andersan
 import andersan.airmonitor
 from andersan.sqlitedictcache import sqlitedict_cache
@@ -160,6 +161,13 @@ class PredictNoDataError(Exception):
     """予測データが無い場合（SQLite キャッシュには保存しない）。"""
 
 
+class OxTilesRequest(BaseModel):
+    prefecture: Literal[tuple(andersan.Neighbors)] = "kanagawa"
+    tiles: list[tuple[int, int]] = Field(
+        ..., description="予測したい地理院タイルの (X, Y) 配列"
+    )
+
+
 # @app.get("/raw/{prefecture}/{datehour}")
 # async def raw_data(
 #     prefecture: Literal[tuple(andersan.airmonitor.prefecture_retrievers)],
@@ -269,7 +277,19 @@ def _load_probability_table(model: str) -> pd.DataFrame:
                 f"確率換算表がありません: {table_path.name} を {PTABLE_DIR} に置いてください。"
             ),
         )
-    return pd.read_feather(table_path)
+    table = pd.read_feather(table_path)
+    # 生成元によっては MultiIndex(bin, hours) が index 側に残るため、
+    # 列参照で一貫して扱えるように正規化する。
+    if "bin" not in table.columns or "hours" not in table.columns:
+        table = table.reset_index()
+    if "bin" not in table.columns or "hours" not in table.columns:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"確率換算表の形式が不正です: {table_path.name} に 'bin'/'hours' がありません。"
+            ),
+        )
+    return table
 
 
 def _lookup_exceedance_prob_from_table(
@@ -553,17 +573,55 @@ def load_model(model_name):
     return predict_ox
 
 
+def load_model_by_tiles(model_name):
+    if model_name == "v0":
+        runner = predict.predict_ox_v0_by_tiles
+    elif model_name == "v0a":
+        runner = predict.predict_ox_v0a_by_tiles
+    elif model_name == "v1":
+        runner = predict.predict_ox_v1_by_tiles
+    elif model_name == "v1a":
+        runner = predict.predict_ox_v1a_by_tiles
+    elif model_name == "a1":
+        runner = predict.predict_ox_a1_by_tiles
+    else:
+        raise InvalidModelException(model_name)
+
+    def predict_ox(prefecture, isodate, tiles):
+        return runner(
+            prefecture, isodate, tiles, tiles_max_retries=API_TILES_MAX_RETRIES
+        )
+
+    return predict_ox
+
+
+def _predicted_tiles_list(df: pd.DataFrame) -> list[list[int]]:
+    if "X" not in df.columns or "Y" not in df.columns:
+        return []
+    return [[int(x), int(y)] for x, y in df[["X", "Y"]].to_numpy().tolist()]
+
+
 @sqlitedict_cache("api_predict_ox")
-def _predict_ox_payload_sync(model: str, prefecture: str, isodate: str) -> dict:
+def _predict_ox_payload_sync(
+    model: str,
+    prefecture: str,
+    isodate: str,
+    tiles: tuple[tuple[int, int], ...] | None = None,
+) -> dict:
     """予測結果の dict（meta 含む）を組み立てる。SQLite キャッシュの単位。"""
-    predict_ox = load_model(model)
-    raw_data = predict_ox(prefecture, isodate)
+    if tiles:
+        predict_ox = load_model_by_tiles(model)
+        raw_data = predict_ox(prefecture, isodate, tiles)
+    else:
+        predict_ox = load_model(model)
+        raw_data = predict_ox(prefecture, isodate)
     if raw_data is None:
         raise PredictNoDataError()
     source_dt = datetime.datetime.fromisoformat(isodate)
     data = dictize(raw_data)
     data["spec"]["items"] = ["OX"]
     data["meta"] = build_meta(source_dt)
+    data["meta"]["predicted_tiles"] = _predicted_tiles_list(raw_data)
     return data
 
 
@@ -625,6 +683,38 @@ async def predict_Ox_a1_route(
 ):
     """andersan1（直接数値予測）。`/ox/a1/{prefecture}/{datehour}` と同じ応答。"""
     return await predict_Ox(prefecture=prefecture, datehour=datehour, model="a1")
+
+
+@app.post("/ox/{model}/{datehour}")
+async def predict_Ox_by_tiles(
+    datehour: Union[datetime.datetime, Literal["now"]],
+    model: str,
+    req: OxTilesRequest,
+):
+    """タイル集合を指定して OX 予測を返す。"""
+    if datehour == "now":
+        datehour = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+        datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    else:
+        datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    isodate = datetime.datetime.isoformat(datehour)
+    try:
+        normalized_tiles = tuple((int(x), int(y)) for x, y in req.tiles)
+        payload = await asyncio.to_thread(
+            _predict_ox_payload_sync,
+            model,
+            req.prefecture,
+            isodate,
+            normalized_tiles,
+        )
+    except PredictNoDataError:
+        raise HTTPException(status_code=404, detail="Data not available")
+    except InvalidModelException as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    except Exception as e:
+        logger.exception(f"Error in tile-set prediction: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in prediction: {e}")
+    return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 @sqlitedict_cache("api_predict_oxq_a4_1")
