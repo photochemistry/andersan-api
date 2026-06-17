@@ -1,90 +1,133 @@
+import logging
+import os
+import socket
 import subprocess
+import sys
 import threading
 import time
-import logging
-import sys
 
-# ロギングの設定
+LOG_LEVEL = os.getenv("PORTFORWARDER_LOG_LEVEL", "INFO").upper()
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
 
-def forward_ssh_port(ssh_host, ssh_port, ssh_user, remote_port, local_port):
-    """Set up SSH port forwarding to an existing local port"""
-    try:
-        # SSHコマンドを構築
-        ssh_command = [
-            "ssh",
-            "-N",  # コマンドを実行しない
-            "-R", f"{remote_port}:localhost:{local_port}",  # リモートポートフォワーディング
-            "-o", "ServerAliveInterval=30",  # キープアライブ
-            "-o", "ServerAliveCountMax=3",   # リトライ回数
-            "-o", "TCPKeepAlive=yes",        # TCPキープアライブを有効化
-            "-o", "ExitOnForwardFailure=yes", # フォワーディング失敗時に終了
-            "-v",  # 詳細なデバッグ情報を表示
-            f"{ssh_user}@{ssh_host}",
-            "-p", str(ssh_port)
-        ]
-        
-        logger.info(f"Starting SSH port forwarding: {' '.join(ssh_command)}")
-        
-        # プロセスを開始
-        process = subprocess.Popen(
-            ssh_command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True
-        )
-        
-        # 標準出力と標準エラー出力を監視
-        def log_output(pipe, prefix):
-            for line in pipe:
-                logger.debug(f"{prefix}: {line.strip()}")
-        
-        stdout_thread = threading.Thread(target=log_output, args=(process.stdout, "STDOUT"))
-        stderr_thread = threading.Thread(target=log_output, args=(process.stderr, "STDERR"))
-        stdout_thread.daemon = True
-        stderr_thread.daemon = True
-        stdout_thread.start()
-        stderr_thread.start()
-        
-        logger.info(f"SSH port forwarding started. Remote port {remote_port} -> Local port {local_port}")
-        
-        # プロセスの終了を待機
-        while True:
-            if process.poll() is not None:
-                logger.warning("SSH process terminated. Restarting...")
-                process = subprocess.Popen(
-                    ssh_command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    universal_newlines=True
-                )
-                stdout_thread = threading.Thread(target=log_output, args=(process.stdout, "STDOUT"))
-                stderr_thread = threading.Thread(target=log_output, args=(process.stderr, "STDERR"))
-                stdout_thread.daemon = True
-                stderr_thread.daemon = True
-                stdout_thread.start()
-                stderr_thread.start()
-            time.sleep(10)
+SSH_HOST = os.getenv("PORTFORWARDER_SSH_HOST", "andersan.net")
+SSH_PORT = int(os.getenv("PORTFORWARDER_SSH_PORT", "22"))
+SSH_USER = os.getenv("PORTFORWARDER_SSH_USER", "ubuntu")
+REMOTE_PORT = int(os.getenv("PORTFORWARDER_REMOTE_PORT", "8087"))
+LOCAL_PORT = int(os.getenv("PORTFORWARDER_LOCAL_PORT", "8087"))
+WAIT_LOCAL_SEC = int(os.getenv("PORTFORWARDER_WAIT_LOCAL_SEC", "120"))
+SSH_VERBOSE = os.getenv("PORTFORWARDER_SSH_VERBOSE", "").lower() in ("1", "true", "yes")
 
-    except Exception as e:
-        logger.error(f"Error occurred: {e}")
+
+def wait_for_local_port(port: int, timeout_sec: int) -> bool:
+    """andersan-api が listen するまで待つ（PM2 並列起動向け）。"""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                logger.info("Local port %s is ready", port)
+                return True
+        except OSError:
+            time.sleep(2)
+    logger.warning(
+        "Local port %s not ready after %ss; starting SSH tunnel anyway",
+        port,
+        timeout_sec,
+    )
+    return False
+
+
+def build_ssh_command(
+    ssh_host: str,
+    ssh_port: int,
+    ssh_user: str,
+    remote_port: int,
+    local_port: int,
+) -> list[str]:
+    ssh_command = [
+        "ssh",
+        "-N",
+        "-R",
+        f"{remote_port}:localhost:{local_port}",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-o",
+        "TCPKeepAlive=yes",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=15",
+        f"{ssh_user}@{ssh_host}",
+        "-p",
+        str(ssh_port),
+    ]
+    if SSH_VERBOSE:
+        ssh_command.insert(1, "-v")
+    return ssh_command
+
+
+def _spawn_ssh(ssh_command: list[str]) -> subprocess.Popen:
+    process = subprocess.Popen(
+        ssh_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+    )
+
+    def log_output(pipe, prefix: str) -> None:
+        for line in pipe:
+            line = line.strip()
+            if line:
+                logger.debug("%s: %s", prefix, line)
+
+    stdout_thread = threading.Thread(target=log_output, args=(process.stdout, "STDOUT"))
+    stderr_thread = threading.Thread(target=log_output, args=(process.stderr, "STDERR"))
+    stdout_thread.daemon = True
+    stderr_thread.daemon = True
+    stdout_thread.start()
+    stderr_thread.start()
+    return process
+
+
+def forward_ssh_port(
+    ssh_host: str,
+    ssh_port: int,
+    ssh_user: str,
+    remote_port: int,
+    local_port: int,
+) -> None:
+    """SSH リバース転送を張り、切れたら再接続する。"""
+    ssh_command = build_ssh_command(
+        ssh_host, ssh_port, ssh_user, remote_port, local_port
+    )
+    logger.info(
+        "Starting SSH port forwarding: remote %s:%s -> localhost:%s",
+        ssh_host,
+        remote_port,
+        local_port,
+    )
+    process = _spawn_ssh(ssh_command)
+
+    while True:
+        if process.poll() is not None:
+            logger.warning(
+                "SSH process terminated (exit=%s). Restarting in 5s...",
+                process.returncode,
+            )
+            time.sleep(5)
+            process = _spawn_ssh(ssh_command)
+        time.sleep(10)
+
 
 if __name__ == "__main__":
-    ssh_host = "andersan.net"
-    ssh_port = 22
-    ssh_user = "ubuntu"
-    remote_port = 8087
-    local_port = 8087
-
-    # Run in thread
-    thread = threading.Thread(target=forward_ssh_port, args=(ssh_host, ssh_port, ssh_user, remote_port, local_port))
-    thread.start()
-    
-    
-# INternet上の中継サーバ側で、sshdに以下の設定を追加
-# GatewayPorts yes
+    # Internet上の中継サーバ側で、sshdに GatewayPorts yes が必要
+    wait_for_local_port(LOCAL_PORT, WAIT_LOCAL_SEC)
+    forward_ssh_port(SSH_HOST, SSH_PORT, SSH_USER, REMOTE_PORT, LOCAL_PORT)
