@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import os
 import argparse
+import math
 from pathlib import Path
 from typing import Literal, Union
 import re
@@ -77,6 +78,24 @@ logger.setLevel(DEFAULT_LOG_LEVEL)
 # sqlitedictのログも有効化
 sqlitedict_logger = getLogger("sqlitedict")
 sqlitedict_logger.setLevel(DEFAULT_LOG_LEVEL)
+
+
+def _lonlat_to_tile_xy_rounded(zoom: int, lon: float, lat: float) -> tuple[int, int]:
+    """
+    経緯度を最寄りの Web Mercator タイル (x, y) に変換する。
+    境界では floor ではなく四捨五入（中心基準）でタイルを選ぶ。
+    """
+    n = 2**zoom
+    x_f = (lon + 180.0) / 360.0 * n
+    lat_rad = math.radians(lat)
+    y_f = (1.0 - math.log(math.tan(lat_rad) + (1.0 / math.cos(lat_rad))) / math.pi) / 2.0 * n
+
+    # Python の round() は銀行丸めなので、通常の四捨五入を使う。
+    x = int(math.floor(x_f + 0.5))
+    y = int(math.floor(y_f + 0.5))
+    x = max(0, min(n - 1, x))
+    y = max(0, min(n - 1, y))
+    return x, y
 
 app = FastAPI()
 
@@ -234,35 +253,72 @@ def build_meta(source_time: datetime.datetime) -> dict:
     }
 
 
-def _cdf_from_q10_q50_q90(y: float, q10: float, q50: float, q90: float) -> float:
-    """q10/q50/q90 から単調な区分線形 CDF を近似する。"""
+def _cdf_from_three_quantiles(
+    y: float,
+    v1: float,
+    v2: float,
+    v3: float,
+    p1: float,
+    p2: float,
+    p3: float,
+) -> float:
+    """3分位点から単調な区分線形 CDF を近似する。"""
     eps = 1e-6
-    q10, q50, q90 = sorted((float(q10), float(q50), float(q90)))
-    s1 = 0.4 / max(q50 - q10, eps)
-    s2 = 0.4 / max(q90 - q50, eps)
+    pairs = sorted(zip((float(v1), float(v2), float(v3)), (p1, p2, p3)))
+    (q_a, q_b, q_c), (p_a, p_b, p_c) = zip(*pairs)
+    s1 = (p_b - p_a) / max(q_b - q_a, eps)
+    s2 = (p_c - p_b) / max(q_c - q_b, eps)
 
-    if y <= q10:
-        cdf = 0.1 - s1 * (q10 - y)
-    elif y <= q50:
-        cdf = 0.1 + s1 * (y - q10)
-    elif y <= q90:
-        cdf = 0.5 + s2 * (y - q50)
+    if y <= q_a:
+        cdf = p_a - s1 * (q_a - y)
+    elif y <= q_b:
+        cdf = p_a + s1 * (y - q_a)
+    elif y <= q_c:
+        cdf = p_b + s2 * (y - q_b)
     else:
-        cdf = 0.9 + s2 * (y - q90)
+        cdf = p_c + s2 * (y - q_c)
     return max(0.0, min(1.0, cdf))
+
+
+def _cdf_from_q10_q50_q90(y: float, q10: float, q50: float, q90: float) -> float:
+    return _cdf_from_three_quantiles(y, q10, q50, q90, 0.1, 0.5, 0.9)
+
+
+def _cdf_from_q50_q90_q95(y: float, q50: float, q90: float, q95: float) -> float:
+    return _cdf_from_three_quantiles(y, q50, q90, q95, 0.5, 0.9, 0.95)
+
+
+def _exceedance_prob_from_quantiles(
+    low_series: pd.Series,
+    mid_series: pd.Series,
+    high_series: pd.Series,
+    threshold: float,
+    cdf_fn,
+) -> list[float]:
+    probs = []
+    for low, mid, high in zip(low_series, mid_series, high_series):
+        if pd.isna(low) or pd.isna(mid) or pd.isna(high):
+            probs.append(None)
+            continue
+        cdf = cdf_fn(float(threshold), low, mid, high)
+        probs.append(1.0 - cdf)
+    return probs
 
 
 def _exceedance_prob_from_q10_q50_q90(
     q10_series: pd.Series, q50_series: pd.Series, q90_series: pd.Series, threshold: float
 ) -> list[float]:
-    probs = []
-    for q10, q50, q90 in zip(q10_series, q50_series, q90_series):
-        if pd.isna(q10) or pd.isna(q50) or pd.isna(q90):
-            probs.append(None)
-            continue
-        cdf = _cdf_from_q10_q50_q90(float(threshold), q10, q50, q90)
-        probs.append(1.0 - cdf)
-    return probs
+    return _exceedance_prob_from_quantiles(
+        q10_series, q50_series, q90_series, threshold, _cdf_from_q10_q50_q90
+    )
+
+
+def _exceedance_prob_from_q50_q90_q95(
+    q50_series: pd.Series, q90_series: pd.Series, q95_series: pd.Series, threshold: float
+) -> list[float]:
+    return _exceedance_prob_from_quantiles(
+        q50_series, q90_series, q95_series, threshold, _cdf_from_q50_q90_q95
+    )
 
 
 def _load_probability_table(model: str) -> pd.DataFrame:
@@ -464,7 +520,7 @@ async def location(lon: float, lat: float) -> str:
     start_time = time.time()
 
     logger.debug(f"Geocoding location: lon={lon}, lat={lat}")
-    x, y = andersan.tile.code(zoom=12, lon=lon, lat=lat)
+    x, y = _lonlat_to_tile_xy_rounded(zoom=12, lon=lon, lat=lat)
     # わざと精度を落す。これにより、キャッシュが効く。
     lon = round(lon, 3)
     lat = round(lat, 3)
@@ -492,6 +548,8 @@ _PTABLE_STEM = {
     "v1": "andersan0_2",
     "v1a": "andersan0_2_1",
     "a1": "andersan1",
+    "a1p": "andersan1_16",
+    "a1q": "andersan1_17",
 }
 
 
@@ -562,6 +620,10 @@ def load_model(model_name):
         runner = predict.predict_ox_v1a
     elif model_name == "a1":
         runner = predict.predict_ox_a1
+    elif model_name == "a1p":
+        runner = predict.predict_ox_a1p
+    elif model_name == "a1q":
+        runner = predict.predict_ox_a1q
     else:
         raise InvalidModelException(model_name)
 
@@ -584,6 +646,10 @@ def load_model_by_tiles(model_name):
         runner = predict.predict_ox_v1a_by_tiles
     elif model_name == "a1":
         runner = predict.predict_ox_a1_by_tiles
+    elif model_name == "a1p":
+        runner = predict.predict_ox_a1p_by_tiles
+    elif model_name == "a1q":
+        runner = predict.predict_ox_a1q_by_tiles
     else:
         raise InvalidModelException(model_name)
 
@@ -636,7 +702,7 @@ async def predict_Ox(
     Args:
     -   prefecture (str): 県名 ["kanagawa"]
     -   datehour (str): 時刻(isoformat) ["2024-09-03T06:00+09:00"] または "now"。正時にそろえられ、分以下は無視されます。
-    -   model (str): 予測モデル（例: v0, v0a, v1, v1a, a1）。`a1` は andersan1（直接回帰・24h先まで）。
+    -   model (str): 予測モデル（例: v0, v0a, v1, v1a, a1, a1p, a1q）。`a1` は andersan1（直接回帰・24h先まで）、`a1p` は andersan1_16、`a1q` は andersan1_17（いずれも a1 と同じ入力構造の改良版）。
 
     Returns:
     -   _str_: 県内の地理院タイル点でのOxの予測値。
@@ -685,6 +751,24 @@ async def predict_Ox_a1_route(
     return await predict_Ox(prefecture=prefecture, datehour=datehour, model="a1")
 
 
+@app.get("/a1p/{prefecture}/{datehour}")
+async def predict_Ox_a1p_route(
+    prefecture: Literal[tuple(andersan.Neighbors)],
+    datehour: Union[datetime.datetime, Literal["now"]],
+):
+    """andersan1_16（a1 と同じ入力構造の改良版）。`/ox/a1p/{prefecture}/{datehour}` と同じ応答。"""
+    return await predict_Ox(prefecture=prefecture, datehour=datehour, model="a1p")
+
+
+@app.get("/a1q/{prefecture}/{datehour}")
+async def predict_Ox_a1q_route(
+    prefecture: Literal[tuple(andersan.Neighbors)],
+    datehour: Union[datetime.datetime, Literal["now"]],
+):
+    """andersan1_17（a1 と同じ入力構造の改良版）。`/ox/a1q/{prefecture}/{datehour}` と同じ応答。"""
+    return await predict_Ox(prefecture=prefecture, datehour=datehour, model="a1q")
+
+
 @app.post("/ox/{model}/{datehour}")
 async def predict_Ox_by_tiles(
     datehour: Union[datetime.datetime, Literal["now"]],
@@ -717,6 +801,17 @@ async def predict_Ox_by_tiles(
     return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
 
 
+def _quantile_ox_items(
+    *, suffixes: tuple[str, str, str] = ("q10", "q50", "q90")
+) -> list[str]:
+    q_lo, q_mid, q_hi = suffixes
+    return (
+        [f"+{h}_{q_lo}" for h in range(1, 25)]
+        + [f"+{h}_{q_mid}" for h in range(1, 25)]
+        + [f"+{h}_{q_hi}" for h in range(1, 25)]
+    )
+
+
 @sqlitedict_cache("api_predict_oxq_a4_1")
 def _predict_oxq_a4_1_payload_sync(prefecture: str, isodate: str) -> dict:
     """andersan4_1（分位点回帰）の予測結果を返す。"""
@@ -727,9 +822,22 @@ def _predict_oxq_a4_1_payload_sync(prefecture: str, isodate: str) -> dict:
         raise PredictNoDataError()
     source_dt = datetime.datetime.fromisoformat(isodate)
     data = dictize(raw_data)
-    data["spec"]["items"] = [
-        f"+{h}_q10" for h in range(1, 25)
-    ] + [f"+{h}_q50" for h in range(1, 25)] + [f"+{h}_q90" for h in range(1, 25)]
+    data["spec"]["items"] = _quantile_ox_items()
+    data["meta"] = build_meta(source_dt)
+    return data
+
+
+@sqlitedict_cache("api_predict_oxq_a3_16_q509095")
+def _predict_oxq_a3_16_payload_sync(prefecture: str, isodate: str) -> dict:
+    """andersan3_16（分位点回帰）の予測結果を返す。"""
+    raw_data = predict.predict_oxq_a3_16(
+        prefecture, isodate, tiles_max_retries=API_TILES_MAX_RETRIES
+    )
+    if raw_data is None:
+        raise PredictNoDataError()
+    source_dt = datetime.datetime.fromisoformat(isodate)
+    data = dictize(raw_data)
+    data["spec"]["items"] = _quantile_ox_items(suffixes=("q50", "q90", "q95"))
     data["meta"] = build_meta(source_dt)
     return data
 
@@ -750,6 +858,32 @@ async def predict_Ox_quantile_a4_1(
     try:
         payload = await asyncio.to_thread(
             _predict_oxq_a4_1_payload_sync, prefecture, isodate
+        )
+    except PredictNoDataError:
+        raise HTTPException(status_code=404, detail="Data not available")
+    except Exception as e:
+        logger.exception(f"Error in quantile prediction: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in quantile prediction: {e}")
+
+    return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+@app.get("/oxq/a3_16/{prefecture}/{datehour}")
+async def predict_Ox_quantile_a3_16(
+    prefecture: Literal[tuple(andersan.Neighbors)],
+    datehour: Union[datetime.datetime, Literal["now"]],
+):
+    """andersan3_16（分位点回帰）を返す。+1..+24 時間先の q50/q90/q95 を含む。"""
+    if prefecture not in andersan.Neighbors:
+        raise HTTPException(status_code=404, detail="Out of the cover area")
+
+    if datehour == "now":
+        datehour = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+    datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    isodate = datetime.datetime.isoformat(datehour)
+    try:
+        payload = await asyncio.to_thread(
+            _predict_oxq_a3_16_payload_sync, prefecture, isodate
         )
     except PredictNoDataError:
         raise HTTPException(status_code=404, detail="Data not available")
@@ -844,13 +978,66 @@ async def predict_Ox_quantile_a4_1_pgt120(
     return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
 
 
+@sqlitedict_cache("api_predict_oxq_a3_16_pgt120_q509095")
+def _predict_oxq_a3_16_pgt120_payload_sync(prefecture: str, isodate: str) -> dict:
+    """andersan3_16 の q50/q90/q95 から 120ppb 超過確率を返す。"""
+    raw_data = predict.predict_oxq_a3_16(
+        prefecture, isodate, tiles_max_retries=API_TILES_MAX_RETRIES
+    )
+    if raw_data is None:
+        raise PredictNoDataError()
+
+    result = raw_data[["X", "Y", "lon", "lat", "Z"]].copy()
+    threshold = 120.0
+    for h in range(1, 25):
+        p = _exceedance_prob_from_q50_q90_q95(
+            raw_data[f"+{h}_q50"],
+            raw_data[f"+{h}_q90"],
+            raw_data[f"+{h}_q95"],
+            threshold=threshold,
+        )
+        result[f"+{h}_p_gt_120"] = p
+
+    source_dt = datetime.datetime.fromisoformat(isodate)
+    data = dictize(result)
+    data["spec"]["items"] = [f"+{h}_p_gt_120" for h in range(1, 25)]
+    data["meta"] = build_meta(source_dt)
+    return data
+
+
+@app.get("/oxq/a3_16/pgt120/{prefecture}/{datehour}")
+async def predict_Ox_quantile_a3_16_pgt120(
+    prefecture: Literal[tuple(andersan.Neighbors)],
+    datehour: Union[datetime.datetime, Literal["now"]],
+):
+    """andersan3_16 の予測から OX が 120ppb を超える確率を返す。"""
+    if prefecture not in andersan.Neighbors:
+        raise HTTPException(status_code=404, detail="Out of the cover area")
+
+    if datehour == "now":
+        datehour = datetime.datetime.now(pytz.timezone("Asia/Tokyo"))
+    datehour = datehour.replace(minute=0, second=0, microsecond=0)
+    isodate = datetime.datetime.isoformat(datehour)
+    try:
+        payload = await asyncio.to_thread(
+            _predict_oxq_a3_16_pgt120_payload_sync, prefecture, isodate
+        )
+    except PredictNoDataError:
+        raise HTTPException(status_code=404, detail="Data not available")
+    except Exception as e:
+        logger.exception(f"Error in exceedance prediction: {e}")
+        raise HTTPException(status_code=500, detail=f"Error in exceedance prediction: {e}")
+
+    return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
+
+
 @app.get("/ox/{model}/pgt120/{prefecture}/{datehour}")
 async def predict_Ox_pgt120(
     model: str,
     prefecture: Literal[tuple(andersan.Neighbors)],
     datehour: Union[datetime.datetime, Literal["now"]],
 ):
-    """通常回帰モデル（v0/v0a/v1/v1a/a1）の 120ppb 超過確率を返す。"""
+    """通常回帰モデル（v0/v0a/v1/v1a/a1/a1p/a1q）の 120ppb 超過確率を返す。"""
     if prefecture not in andersan.Neighbors:
         raise HTTPException(status_code=404, detail="Out of the cover area")
     if model not in _PTABLE_STEM:
