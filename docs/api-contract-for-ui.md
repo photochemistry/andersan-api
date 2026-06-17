@@ -41,19 +41,21 @@
 - `data` の主なキー:
   - `+1_p_gt_120`, `+2_p_gt_120`, ...
 
-### 3) 分位点回帰（andersan4_1）
+### 3) 分位点回帰（andersan4_1 / andersan3_16）
 
-- `GET /oxq/a4_1/{prefecture}/{datehour}`
-- 内容:
-  - 24時間先までの分位点 `q10/q50/q90`
-- `data` の主なキー:
-  - `+1_q10`, `+1_q50`, `+1_q90`, ..., `+24_q10`, `+24_q50`, `+24_q90`
+- `GET /oxq/a4_1/{prefecture}/{datehour}` … 8近傍 lookback（andersan4_1）
+  - 分位点: `q10/q50/q90`（0.1 / 0.5 / 0.9）
+  - キー: `+1_q10`, `+1_q50`, `+1_q90`, ..., `+24_q90`
+- `GET /oxq/a3_16/{prefecture}/{datehour}` … 中心タイル lookback（andersan3_16）
+  - 分位点: `q50/q90/q95`（0.5 / 0.9 / 0.95）
+  - キー: `+1_q50`, `+1_q90`, `+1_q95`, ..., `+24_q95`
 
 ### 4) 分位点回帰の120ppb超過確率（補間ベース）
 
-- `GET /oxq/a4_1/pgt120/{prefecture}/{datehour}`
+- `GET /oxq/a4_1/pgt120/{prefecture}/{datehour}` … q10/q50/q90 から CDF 補間
+- `GET /oxq/a3_16/pgt120/{prefecture}/{datehour}` … q50/q90/q95 から CDF 補間
 - 計算:
-  - `q10/q50/q90` から単調区分線形CDFを構成
+  - 各モデルの3分位点から単調区分線形CDFを構成
   - `P(OX>120) = 1 - F(120)`
 - `data` の主なキー:
   - `+1_p_gt_120`, `+2_p_gt_120`, ..., `+24_p_gt_120`
@@ -72,5 +74,5 @@
   - `/oxq`: 分位点予測
 - 120ppb超過確率を使う場合は、まず専用APIを優先
   - 通常回帰: `/ox/{model}/pgt120/...`
-  - 分位点回帰: `/oxq/a4_1/pgt120/...`
+  - 分位点回帰: `/oxq/a4_1/pgt120/...` または `/oxq/a3_16/pgt120/...`
 - `datehour=now` はサーバー側で正時に丸められる

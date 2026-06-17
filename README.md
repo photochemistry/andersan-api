@@ -2,11 +2,17 @@
 
 大気環境予測システムのAPIサーバー
 
-## UI/AI向け固定仕様
+## ドキュメント
 
-- Cursor AI が `andersan-ui` 側から参照しやすい固定仕様:
+- **UI/AI向け固定仕様**（`andersan-ui` 参照用）:
   - `docs/api-contract-for-ui.md`
   - `docs/api-contract-for-ui.json`
+- **APW グリッド取得の遅延・タイムアウト**（調査メモ・未対応の対策案）:
+  - `docs/apw-grid-fetch-performance.md`
+- **月報**（CHUCK4・手採取ログ形式）:
+  - `/AIR/MONTHLY_REPORT_CHUCK4-2026-05-21.md`
+- **運用ログ数値詳細**（2026-04-16 以降）:
+  - `docs/monthly-report-2026-04-16.md`
 - API経由でも取得可能:
   - `/contract/ui`（JSON）
   - `/contract/ui.md`（Markdown）
@@ -50,17 +56,21 @@
   - `model`: 予測モデル（"v0", "v0a", "v1", "v1a", "a1"）
 - 返却値: 確率分布表（JSON形式）
 
-#### 2.3 OX分位点予測値（andersan4_1）
-- エンドポイント: `/oxq/a4_1/{prefecture}/{datehour}`
-- 説明: 指定された県のタイル点で、1〜24時間先の OX 分位点予測（q10/q50/q90）を返す
+#### 2.3 OX分位点予測値（andersan4_1 / andersan3_16）
+- エンドポイント:
+  - `/oxq/a4_1/{prefecture}/{datehour}` … andersan4_1（8近傍 lookback）
+  - `/oxq/a3_16/{prefecture}/{datehour}` … andersan3_16（中心タイル lookback）
+- 説明: 指定された県のタイル点で、1〜24時間先の OX 分位点予測を返す（a4_1: q10/q50/q90、a3_16: q50/q90/q95）
 - パラメータ:
   - `prefecture`: 県名（例: "kanagawa"）
   - `datehour`: 時刻（ISOフォーマット、例: "2024-09-03T06:00+09:00" または "now"）
 - 返却値: タイル点での分位点予測（JSON形式）
 
-#### 2.4 OX120ppb超過確率（andersan4_1）
-- エンドポイント: `/oxq/a4_1/pgt120/{prefecture}/{datehour}`
-- 説明: `q10/q50/q90` から単調CDF補間（区分線形）で推定した、1〜24時間先の `P(OX > 120ppb)` を返す
+#### 2.4 OX120ppb超過確率（andersan4_1 / andersan3_16）
+- エンドポイント:
+  - `/oxq/a4_1/pgt120/{prefecture}/{datehour}`
+  - `/oxq/a3_16/pgt120/{prefecture}/{datehour}`
+- 説明: 分位点（a4_1: q10/q50/q90、a3_16: q50/q90/q95）から単調CDF補間で推定した、1〜24時間先の `P(OX > 120ppb)` を返す
 - パラメータ:
   - `prefecture`: 県名（例: "kanagawa"）
   - `datehour`: 時刻（ISOフォーマット、例: "2024-09-03T06:00+09:00" または "now"）
@@ -110,6 +120,7 @@
   - `a1`: andersan1（直接回帰、24時間先まで）
 - 分位点回帰モデル:
   - `a4_1`: andersan4_1（`/oxq/a4_1/...` で q10/q50/q90 を返す）
+  - `a3_16`: andersan3_16（`/oxq/a3_16/...` で q50/q90/q95 を返す）
 
 ## 機能
 

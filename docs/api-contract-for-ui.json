@@ -64,6 +64,29 @@
       "horizons": 24
     },
     {
+      "path": "/oxq/a3_16/{prefecture}/{datehour}",
+      "method": "GET",
+      "kind": "quantile_regression",
+      "model": "andersan3_16",
+      "quantiles": [
+        0.5,
+        0.9,
+        0.95
+      ],
+      "horizons": 24,
+      "data_keys_pattern": "+{hour}_q50/+{hour}_q90/+{hour}_q95"
+    },
+    {
+      "path": "/oxq/a3_16/pgt120/{prefecture}/{datehour}",
+      "method": "GET",
+      "kind": "exceedance_probability_from_quantiles",
+      "model": "andersan3_16",
+      "threshold_ppb": 120,
+      "algorithm": "monotone_piecewise_linear_cdf",
+      "data_keys_pattern": "+{hour}_p_gt_120",
+      "horizons": 24
+    },
+    {
       "path": "/ptable/{model}",
       "method": "GET",
       "models": [
