@@ -12,6 +12,7 @@ module.exports = {
         CUDA_VISIBLE_DEVICES: "-1",
         // APW_BASE_URL: "http://andersan.net:8090",
         // APW_API_BEARER_TOKEN: "...",  // 未設定時は api_keys.toml の apw を使用
+        // ALERT_DISCORD_WEBHOOK_URL: "...",  // 500/502/503 発生時の Discord 通知先
       },
       instances: 1,
       exec_mode: "fork",

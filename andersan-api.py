@@ -21,9 +21,18 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 import andersan
 import andersan.airmonitor
+from andersan.airmonitor import ApwGridFetchError
 from andersan.sqlitedictcache import sqlitedict_cache
 from andersan_core import predict
 import json
+
+from discord_alerts import (
+    clear_pending_alert_detail,
+    is_severe_status,
+    notify_system_error,
+    set_pending_alert_detail,
+    take_pending_alert_detail,
+)
 
 # ログ設定
 DEFAULT_LOG_LEVEL_NAME = os.getenv("ANDERSAN_LOG_LEVEL", "INFO").upper()
@@ -139,6 +148,22 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def discord_system_alert_middleware(request: Request, call_next):
+    """500/502/503 を Discord に通知する（同一内容はクールダウン）。"""
+    clear_pending_alert_detail()
+    response = await call_next(request)
+    if is_severe_status(response.status_code):
+        detail = take_pending_alert_detail() or f"HTTP {response.status_code}"
+        notify_system_error(
+            response.status_code,
+            detail,
+            method=request.method,
+            path=request.url.path,
+        )
+    return response
+
+
 ITEMS = ["NMHC", "OX", "NOX", "TEMP", "WX", "WY"]
 
 # API 経由の airmonitor.tiles（APW）はワーカー占有を避けるため HTTP 再試行を行わない（1 試行のみ）
@@ -178,6 +203,34 @@ class InvalidModelException(Exception):
 
 class PredictNoDataError(Exception):
     """予測データが無い場合（SQLite キャッシュには保存しない）。"""
+
+
+def _raise_http(status_code: int, detail: str) -> None:
+    if is_severe_status(status_code):
+        set_pending_alert_detail(detail)
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
+def _raise_from_thread_error(exc: BaseException, *, context: str) -> None:
+    """asyncio.to_thread から伝播した例外を HTTP 応答に変換する。"""
+    if isinstance(exc, HTTPException):
+        if is_severe_status(exc.status_code):
+            set_pending_alert_detail(str(exc.detail))
+        raise exc
+    if isinstance(exc, PredictNoDataError):
+        raise HTTPException(status_code=404, detail="Data not available")
+    if isinstance(exc, InvalidModelException):
+        raise HTTPException(status_code=400, detail=exc.message)
+    if isinstance(exc, ApwGridFetchError):
+        _raise_http(502, str(exc))
+    msg = str(exc)
+    if isinstance(exc, RuntimeError):
+        if msg.startswith("Failed to fetch observed data from APW"):
+            _raise_http(502, msg)
+        if "Missing observed data" in msg or "Missing fallback observed data" in msg:
+            raise HTTPException(status_code=404, detail="Data not available")
+    logger.exception("%s: %s", context, exc)
+    _raise_http(500, f"{context}: {exc}")
 
 
 class OxTilesRequest(BaseModel):
@@ -327,9 +380,9 @@ def _load_probability_table(model: str) -> pd.DataFrame:
     stem = _PTABLE_STEM[model]
     table_path = PTABLE_DIR / f"{stem}.table.feather"
     if not table_path.is_file():
-        raise HTTPException(
-            status_code=404,
-            detail=(
+        _raise_http(
+            503,
+            (
                 f"確率換算表がありません: {table_path.name} を {PTABLE_DIR} に置いてください。"
             ),
         )
@@ -339,9 +392,9 @@ def _load_probability_table(model: str) -> pd.DataFrame:
     if "bin" not in table.columns or "hours" not in table.columns:
         table = table.reset_index()
     if "bin" not in table.columns or "hours" not in table.columns:
-        raise HTTPException(
-            status_code=500,
-            detail=(
+        _raise_http(
+            500,
+            (
                 f"確率換算表の形式が不正です: {table_path.name} に 'bin'/'hours' がありません。"
             ),
         )
@@ -389,9 +442,12 @@ async def tile_data(
 
     datehour = datehour.replace(minute=0, second=0, microsecond=0)
     isodate = datetime.datetime.isoformat(datehour)
-    raw_data = andersan.airmonitor.tiles(
-        prefecture, isodate, zoom, items=ITEMS, max_retries=API_TILES_MAX_RETRIES
-    )
+    try:
+        raw_data = andersan.airmonitor.tiles(
+            prefecture, isodate, zoom, items=ITEMS, max_retries=API_TILES_MAX_RETRIES
+        )
+    except ApwGridFetchError as e:
+        _raise_http(502, str(e))
     if raw_data is None:
         raise HTTPException(status_code=404, detail="Data not available")
 
@@ -431,13 +487,16 @@ async def observed_item(
     data["data"] = dict()
     for hour in range(-23, 1):
         isodate = datetime.datetime.isoformat(datehour + datetime.timedelta(hours=hour))
-        raw_data = andersan.airmonitor.tiles(
-            prefecture,
-            isodate,
-            zoom=12,
-            items=(item,),
-            max_retries=API_TILES_MAX_RETRIES,
-        )
+        try:
+            raw_data = andersan.airmonitor.tiles(
+                prefecture,
+                isodate,
+                zoom=12,
+                items=(item,),
+                max_retries=API_TILES_MAX_RETRIES,
+            )
+        except ApwGridFetchError as e:
+            _raise_http(502, str(e))
         # print(f"prefecture: {prefecture}, isodate: {isodate}")
         if raw_data is None:
             raise HTTPException(status_code=404, detail="Data not available")
@@ -563,13 +622,13 @@ async def probability_table(
         model (str): 予測モデル。
     """
     if model not in _PTABLE_STEM:
-        raise InvalidModelException(model)
+        raise HTTPException(status_code=400, detail=f"Model '{model}' is not available.")
     stem = _PTABLE_STEM[model]
     table_path = PTABLE_DIR / f"{stem}.table.feather"
     if not table_path.is_file():
-        raise HTTPException(
-            status_code=404,
-            detail=(
+        _raise_http(
+            503,
+            (
                 f"確率換算表がありません: {table_path.name} を {PTABLE_DIR} に置いてください。"
             ),
         )
@@ -581,9 +640,9 @@ async def probability_table(
 async def ui_api_contract():
     """UI/AI向け固定API仕様を返す（JSON）。"""
     if not UI_API_CONTRACT_JSON.is_file():
-        raise HTTPException(
-            status_code=404,
-            detail=(
+        _raise_http(
+            503,
+            (
                 f"仕様ファイルがありません: {UI_API_CONTRACT_JSON.name} を {DOCS_DIR} に置いてください。"
             ),
         )
@@ -597,9 +656,9 @@ async def ui_api_contract():
 async def ui_api_contract_markdown():
     """UI/AI向け固定API仕様を返す（Markdown）。"""
     if not UI_API_CONTRACT_MD.is_file():
-        raise HTTPException(
-            status_code=404,
-            detail=(
+        _raise_http(
+            503,
+            (
                 f"仕様ファイルがありません: {UI_API_CONTRACT_MD.name} を {DOCS_DIR} に置いてください。"
             ),
         )
@@ -717,24 +776,15 @@ async def predict_Ox(
         datehour = datehour.replace(minute=0, second=0, microsecond=0)
     else:
         datehour = datehour.replace(minute=0, second=0, microsecond=0)
-    try:
-        isodate = datetime.datetime.isoformat(datehour)
-        logger.debug(f"Using datetime: {datehour} (tzinfo: {datehour.tzinfo})")
-    except Exception as e:
-        logger.error(f"Error processing datetime: {e}")
-        raise HTTPException(status_code=500, detail=f"Error processing datetime: {e}")
+    isodate = datetime.datetime.isoformat(datehour)
+    logger.debug(f"Using datetime: {datehour} (tzinfo: {datehour.tzinfo})")
 
     try:
         payload = await asyncio.to_thread(
             _predict_ox_payload_sync, model, prefecture, isodate
         )
-    except PredictNoDataError:
-        raise HTTPException(status_code=404, detail="Data not available")
-    except InvalidModelException as e:
-        raise HTTPException(status_code=400, detail=e.message)
     except Exception as e:
-        logger.exception(f"Error in prediction: {e}")
-        raise HTTPException(status_code=500, detail=f"Error in prediction: {e}")
+        _raise_from_thread_error(e, context="Error in prediction")
 
     process_time = time.time() - start_time
     logger.debug(f"predict_Ox internal processing time: {process_time:.3f} seconds")
@@ -791,13 +841,8 @@ async def predict_Ox_by_tiles(
             isodate,
             normalized_tiles,
         )
-    except PredictNoDataError:
-        raise HTTPException(status_code=404, detail="Data not available")
-    except InvalidModelException as e:
-        raise HTTPException(status_code=400, detail=e.message)
     except Exception as e:
-        logger.exception(f"Error in tile-set prediction: {e}")
-        raise HTTPException(status_code=500, detail=f"Error in prediction: {e}")
+        _raise_from_thread_error(e, context="Error in prediction")
     return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
 
 
@@ -859,11 +904,8 @@ async def predict_Ox_quantile_a4_1(
         payload = await asyncio.to_thread(
             _predict_oxq_a4_1_payload_sync, prefecture, isodate
         )
-    except PredictNoDataError:
-        raise HTTPException(status_code=404, detail="Data not available")
     except Exception as e:
-        logger.exception(f"Error in quantile prediction: {e}")
-        raise HTTPException(status_code=500, detail=f"Error in quantile prediction: {e}")
+        _raise_from_thread_error(e, context="Error in quantile prediction")
 
     return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
 
@@ -885,11 +927,8 @@ async def predict_Ox_quantile_a3_16(
         payload = await asyncio.to_thread(
             _predict_oxq_a3_16_payload_sync, prefecture, isodate
         )
-    except PredictNoDataError:
-        raise HTTPException(status_code=404, detail="Data not available")
     except Exception as e:
-        logger.exception(f"Error in quantile prediction: {e}")
-        raise HTTPException(status_code=500, detail=f"Error in quantile prediction: {e}")
+        _raise_from_thread_error(e, context="Error in quantile prediction")
 
     return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
 
@@ -969,11 +1008,8 @@ async def predict_Ox_quantile_a4_1_pgt120(
         payload = await asyncio.to_thread(
             _predict_oxq_a4_1_pgt120_payload_sync, prefecture, isodate
         )
-    except PredictNoDataError:
-        raise HTTPException(status_code=404, detail="Data not available")
     except Exception as e:
-        logger.exception(f"Error in exceedance prediction: {e}")
-        raise HTTPException(status_code=500, detail=f"Error in exceedance prediction: {e}")
+        _raise_from_thread_error(e, context="Error in exceedance prediction")
 
     return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
 
@@ -1022,11 +1058,8 @@ async def predict_Ox_quantile_a3_16_pgt120(
         payload = await asyncio.to_thread(
             _predict_oxq_a3_16_pgt120_payload_sync, prefecture, isodate
         )
-    except PredictNoDataError:
-        raise HTTPException(status_code=404, detail="Data not available")
     except Exception as e:
-        logger.exception(f"Error in exceedance prediction: {e}")
-        raise HTTPException(status_code=500, detail=f"Error in exceedance prediction: {e}")
+        _raise_from_thread_error(e, context="Error in exceedance prediction")
 
     return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
 
@@ -1051,15 +1084,8 @@ async def predict_Ox_pgt120(
         payload = await asyncio.to_thread(
             _predict_ox_pgt120_payload_sync, model, prefecture, isodate
         )
-    except PredictNoDataError:
-        raise HTTPException(status_code=404, detail="Data not available")
-    except InvalidModelException as e:
-        raise HTTPException(status_code=400, detail=e.message)
     except Exception as e:
-        logger.exception(f"Error in exceedance prediction from table: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Error in exceedance prediction from table: {e}"
-        )
+        _raise_from_thread_error(e, context="Error in exceedance prediction from table")
 
     return Response(content=json.dumps(payload, indent=2, ensure_ascii=False))
 
